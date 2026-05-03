@@ -448,7 +448,6 @@ try {
         "RARLab.WinRAR"
         "AnyDesk.AnyDesk"
         "winaero.tweaker"
-        "9PL9KHLVRQQX" # Text Blaze
     )
 
     Remove-AppxPackagesSafe -PackageNames $appxApps
