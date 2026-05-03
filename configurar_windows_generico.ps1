@@ -531,7 +531,7 @@ try {
     Ensure-Winget
     Update-AllPackagesWithWinget
     Install-WingetPackagesIfMissing -PackageIds $packagesToInstall
-    DownloadsFolderAsDefault
+    Set-DownloadsFolderAsDefault
     Set-MouseSettings
     # Set-SingleClickOpenItems
     Restart-Explorer
