@@ -420,6 +420,68 @@ function Remove-AppxPackagesSafe {
     }
 }
 
+function Pin-RunToTaskbar {
+    Invoke-Safely "Fixando 'Executar' na barra de tarefas" {
+
+        $shortcutName = "Executar.lnk"
+        $shortcutDir  = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
+        $shortcutPath = Join-Path $shortcutDir $shortcutName
+
+        $taskbarPins = Join-Path $env:APPDATA "Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+
+        # Verifica se já está fixado
+        if (Test-Path (Join-Path $taskbarPins $shortcutName)) {
+            Write-Log "'Executar' já está fixado na barra de tarefas." 'OK'
+            return
+        }
+
+        # Cria atalho persistente
+        $WScriptShell = New-Object -ComObject WScript.Shell
+        $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = "$env:WINDIR\System32\rundll32.exe"
+        $shortcut.Arguments = "shell32.dll,#61"
+        $shortcut.WorkingDirectory = "$env:WINDIR\System32"
+        $shortcut.IconLocation = "$env:WINDIR\System32\shell32.dll,25"
+        $shortcut.Description = "Abrir caixa Executar"
+        $shortcut.Save()
+
+        # Tenta fixar usando verbos do Explorer
+        $shell = New-Object -ComObject Shell.Application
+        $folder = $shell.Namespace($shortcutDir)
+        $item = $folder.ParseName($shortcutName)
+
+        if (-not $item) {
+            throw "Não foi possível localizar o atalho criado: $shortcutPath"
+        }
+
+        $pinVerbs = @(
+            "Fixar na barra de tarefas",
+            "Pin to taskbar",
+            "Pin to Taskbar"
+        )
+
+        $verb = $item.Verbs() | Where-Object {
+            $cleanName = $_.Name.Replace("&", "").Trim()
+            $pinVerbs -contains $cleanName
+        } | Select-Object -First 1
+
+        if ($verb) {
+            $verb.DoIt()
+            Start-Sleep -Milliseconds 800
+
+            if (Test-Path (Join-Path $taskbarPins $shortcutName)) {
+                Write-Log "'Executar' fixado na barra de tarefas com sucesso." 'OK'
+            } else {
+                Write-Log "Comando de fixação executado, mas não foi possível confirmar se foi fixado." 'WARN'
+            }
+        }
+        else {
+            Write-Log "Não encontrei a opção 'Fixar na barra de tarefas'. Talvez o Windows tenha bloqueado esse método." 'WARN'
+            Write-Log "Atalho criado em: $shortcutPath" 'INFO'
+        }
+    }
+}
+
 try {
     Ensure-Elevated
 
@@ -471,6 +533,7 @@ try {
     Update-AllPackagesWithWinget
     Install-WingetPackagesIfMissing -PackageIds $packagesToInstall
     Set-MouseSettings
+    Pin-RunToTaskbar
     Restart-Explorer
     Open-FileExplorerOptions
 
