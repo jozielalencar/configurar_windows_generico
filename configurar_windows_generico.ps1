@@ -138,6 +138,16 @@ function Invoke-ExplorerRefresh {
     [void][WinAPI.NativeMethods]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 0x0002, 5000, [ref]$result)
 }
 
+function Restart-Explorer {
+    Invoke-Safely "Reiniciando o Explorer para aplicar alterações" {
+        Get-Process -Name explorer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        Start-Process explorer.exe
+        Start-Sleep -Seconds 3
+        Invoke-ExplorerRefresh
+    } -ContinueOnError
+}
+
 function Set-MouseSettings {
     Invoke-Safely "Configurando velocidade do cursor para o máximo" {
         Set-RegistryValueIfNeeded -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseSensitivity' -Value '20' -Type ([Microsoft.Win32.RegistryValueKind]::String)
@@ -160,6 +170,73 @@ function Set-MouseSettings {
         }
 
         Write-Log "Velocidade do cursor confirmada em 20 e rolagem confirmada em 6 linhas." 'OK'
+    }
+}
+
+<#
+function Set-SingleClickOpenItems {
+    Invoke-Safely "Configurando clique único para abrir itens" {
+        $cabinetStatePath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\CabinetState'
+        $explorerPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer'
+
+        Set-RegistryValueIfNeeded -Path $explorerPath -Name 'IconUnderline' -Value 2 -Type ([Microsoft.Win32.RegistryValueKind]::DWord)
+
+        # Configuração do Explorer para "clicar uma vez para abrir um item"
+        Set-RegistryValueIfNeeded -Path $cabinetStatePath -Name 'Settings' -Value ([byte[]](0x0C,0x00,0x02,0x00,0x0B,0x00,0x00,0x00)) -Type ([Microsoft.Win32.RegistryValueKind]::Binary)
+
+        Invoke-ExplorerRefresh
+    }
+
+    Invoke-Safely "Validando clique único para abrir itens" {
+        $iconUnderline = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' -Name 'IconUnderline' -ErrorAction Stop).IconUnderline
+        $settings = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\CabinetState' -Name 'Settings' -ErrorAction Stop).Settings
+        $expected = [byte[]](0x0C,0x00,0x02,0x00,0x0B,0x00,0x00,0x00)
+
+        if ($iconUnderline -ne 2) {
+            throw "IconUnderline não foi configurado corretamente."
+        }
+
+        if (-not ([System.Linq.Enumerable]::SequenceEqual([byte[]]$settings, [byte[]]$expected))) {
+            throw "A configuração binária do clique único não foi aplicada corretamente."
+        }
+
+        Write-Log "Configuração de clique único validada com sucesso." 'OK'
+    }
+} #>
+
+function Set-DownloadsFolderAsDefault {
+    Invoke-Safely "Configurando pasta Downloads como pasta inicial do Explorer" {
+        $explorerPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer'
+        $downloadsFolder = Join-Path $env:HOMEPATH 'Downloads'
+        
+        # Verifica se a pasta Downloads existe
+        if (-not (Test-Path -Path $downloadsFolder)) {
+            throw "Pasta Downloads não encontrada em: $downloadsFolder"
+        }
+
+        Set-RegistryValueIfNeeded -Path $explorerPath -Name 'StartPage' -Value 0 -Type ([Microsoft.Win32.RegistryValueKind]::DWord)
+        Set-RegistryValueIfNeeded -Path $explorerPath -Name 'Logon User Name' -Value $env:USERNAME -Type ([Microsoft.Win32.RegistryValueKind]::String)
+        
+        # Define a pasta Downloads como padrão
+        $cabinetPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders'
+        if (-not (Test-Path -Path $cabinetPath)) {
+            New-Item -Path $cabinetPath -Force | Out-Null
+        }
+        
+        Set-RegistryValueIfNeeded -Path $cabinetPath -Name '(Default)' -Value $downloadsFolder -Type ([Microsoft.Win32.RegistryValueKind]::String)
+    }
+
+    Invoke-Safely "Validando configuração da pasta inicial" {
+        $cabinetPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders'
+        $downloadsFolder = Join-Path $env:HOMEPATH 'Downloads'
+        
+        $currentValue = (Get-ItemProperty -Path $cabinetPath -Name '(Default)' -ErrorAction Stop).'(Default)'
+        
+        if ($currentValue -ne $downloadsFolder) {
+            Write-Log "Aviso: A pasta inicial pode não ter sido configurada corretamente." 'WARN'
+        } else {
+            Write-Log "Pasta Downloads confirmada como pasta inicial." 'OK'
+        }
     }
 }
 
@@ -455,6 +532,8 @@ try {
     Update-AllPackagesWithWinget
     Install-WingetPackagesIfMissing -PackageIds $packagesToInstall
     Set-MouseSettings
+    # Set-SingleClickOpenItems
+    Restart-Explorer
 
     Write-Log "Script concluído com sucesso." 'OK'
 }
