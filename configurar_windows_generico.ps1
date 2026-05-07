@@ -467,28 +467,59 @@ function Add-RunToTaskbarPin {
         else {
             Write-Log "Não encontrei a opção 'Fixar na barra de tarefas'. Tentando fallback direto via pasta de itens fixados." 'WARN'
 
-            if (-not (Test-Path -Path $taskbarPins)) {
-                New-Item -Path $taskbarPins -ItemType Directory -Force | Out-Null
-            }
-
             $taskbarShortcutPath = Join-Path $taskbarPins $shortcutName
-
-            try {
-                Copy-Item -Path $shortcutPath -Destination $taskbarShortcutPath -Force
-                Start-Sleep -Milliseconds 800
-                Invoke-ExplorerRefresh
-
-                if (Test-Path $taskbarShortcutPath) {
-                    Write-Log "'Executar' fixado na barra de tarefas via fallback." 'OK'
+            
+            Write-Log "Caminho do taskbar pins: $taskbarPins" 'INFO'
+            Write-Log "Caminho do atalho original: $shortcutPath" 'INFO'
+            Write-Log "Caminho de destino: $taskbarShortcutPath" 'INFO'
+            
+            if (-not (Test-Path -Path $taskbarPins)) {
+                Write-Log "Pasta de pins não existe. Tentando criar: $taskbarPins" 'WARN'
+                try {
+                    New-Item -Path $taskbarPins -ItemType Directory -Force | Out-Null
+                    Write-Log "Pasta criada com sucesso." 'INFO'
                 }
-                else {
-                    Write-Log "Fallback de fixação criou o atalho mas não confirmou fixação." 'WARN'
-                    Write-Log "Atalho criado em: $shortcutPath" 'INFO'
+                catch {
+                    Write-Log "Erro ao criar pasta de pins: $($_.Exception.Message)" 'ERROR'
+                    $taskbarPins = $null
                 }
             }
-            catch {
-                Write-Log "Fallback de fixação falhou: $($_.Exception.Message)" 'WARN'
-                Write-Log "Atalho criado em: $shortcutPath" 'INFO'
+            else {
+                Write-Log "Pasta de pins existe." 'INFO'
+            }
+
+            if ($taskbarPins) {
+                try {
+                    if (Test-Path $shortcutPath) {
+                        Write-Log "Atalho original existe. Copiando..." 'INFO'
+                        Copy-Item -Path $shortcutPath -Destination $taskbarShortcutPath -Force -ErrorAction Stop
+                        Write-Log "Atalho copiado com sucesso." 'INFO'
+                        
+                        Start-Sleep -Milliseconds 500
+                        Invoke-ExplorerRefresh
+
+                        if (Test-Path $taskbarShortcutPath) {
+                            Write-Log "'Executar' fixado na barra de tarefas via fallback (cópia direta)." 'OK'
+                        }
+                        else {
+                            Write-Log "Cópia foi feita mas o arquivo não está acessível imediatamente. Aguardando..." 'WARN'
+                            Start-Sleep -Milliseconds 1000
+                            if (Test-Path $taskbarShortcutPath) {
+                                Write-Log "'Executar' confirmado após espera." 'OK'
+                            }
+                            else {
+                                Write-Log "Atalho criado em: $shortcutPath (não confirmado no taskbar)" 'INFO'
+                            }
+                        }
+                    }
+                    else {
+                        Write-Log "Atalho original não existe em: $shortcutPath" 'ERROR'
+                    }
+                }
+                catch {
+                    Write-Log "Fallback direto falhou: $($_.Exception.Message)" 'ERROR'
+                    Write-Log "Atalho foi criado em: $shortcutPath (pode ser fixado manualmente)" 'INFO'
+                }
             }
         }
     }
