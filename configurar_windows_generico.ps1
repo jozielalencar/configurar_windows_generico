@@ -486,6 +486,22 @@ function Load-ConfigFromJson {
     }
 }
 
+function Test-InternetConnection {
+    try {
+        Resolve-DnsName -Name 'www.msftconnecttest.com' -ErrorAction Stop | Out-Null
+        return $true
+    }
+    catch {
+        try {
+            Invoke-WebRequest -Uri 'https://www.msftconnecttest.com/connecttest.txt' -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop | Out-Null
+            return $true
+        }
+        catch {
+            return $false
+        }
+    }
+}
+
 try {
     Write-Log "Iniciando script..." 'INFO'
 
@@ -500,13 +516,18 @@ try {
 
     Remove-AppxPackagesSafe -PackageNames $appxApps
 
-    if (-not (Test-Connection -ComputerName "8.8.8.8" -Count 1 -Quiet)) {
-        Write-Log "Sem conexão com a internet. Pulando instalação de pacotes." 'WARN'
+    if ($SkipWinget) {
+        Write-Log "Opção SkipWinget ativada. Pulando instalação de pacotes via Winget." 'WARN'
     }
     else {
-        Ensure-Winget
-        Update-AllPackagesWithWinget
-        Install-WingetPackagesIfMissing -PackageIds $packagesToInstall
+        if (-not (Test-InternetConnection)) {
+            Write-Log "Sem conexão com a internet. Pulando instalação de pacotes." 'WARN'
+        }
+        else {
+            Ensure-Winget
+            Update-AllPackagesWithWinget
+            Install-WingetPackagesIfMissing -PackageIds $packagesToInstall
+        }
     }
 
     Set-MouseSettings
