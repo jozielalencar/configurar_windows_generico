@@ -1,6 +1,10 @@
 #Requires -Version 5.1
 #Requires -RunAsAdministrator
 
+param(
+    [switch]$SkipWinget
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
