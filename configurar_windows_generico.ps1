@@ -86,7 +86,7 @@ function Set-RegistryValueIfNeeded {
     }
 }
 
-function Ensure-NativeMethodsLoaded {
+function Import-NativeMethods {
     if ('WinAPI.NativeMethods' -as [type]) {
         return
     }
@@ -110,7 +110,7 @@ namespace WinAPI
 }
 
 function Invoke-ExplorerRefresh {
-    Ensure-NativeMethodsLoaded
+    Import-NativeMethods
 
     [UIntPtr]$result = [UIntPtr]::Zero
     [WinAPI.NativeMethods]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
@@ -190,7 +190,7 @@ function Get-WingetPathFromAppInstaller {
     return $null
 }
 
-function Ensure-Winget {
+function Get-WingetExecutable {
     $script:WingetExe = $null
 
     $cmd = Get-Command winget.exe -ErrorAction SilentlyContinue
@@ -405,7 +405,7 @@ function Remove-AppxPackagesSafe {
     }
 }
 
-function Pin-RunToTaskbar {
+function Add-RunToTaskbarPin {
     Invoke-Safely "Fixando 'Executar' na barra de tarefas" {
 
         $shortcutName = "Executar.lnk"
@@ -467,7 +467,7 @@ function Pin-RunToTaskbar {
     }
 }
 
-function Load-ConfigFromJson {
+function Import-ConfigFromJson {
     param(
         [Parameter(Mandatory = $true)][string]$ConfigPath
     )
@@ -510,7 +510,7 @@ try {
     $configPath = Join-Path $scriptDir "config.json"
 
     # Carrega configuração do JSON
-    $config = Load-ConfigFromJson -ConfigPath $configPath
+    $config = Import-ConfigFromJson -ConfigPath $configPath
     $appxApps = $config.remove
     $packagesToInstall = $config.install
 
@@ -524,14 +524,14 @@ try {
             Write-Log "Sem conexão com a internet. Pulando instalação de pacotes." 'WARN'
         }
         else {
-            Ensure-Winget
+            Get-WingetExecutable
             Update-AllPackagesWithWinget
             Install-WingetPackagesIfMissing -PackageIds $packagesToInstall
         }
     }
 
     Set-MouseSettings
-    Pin-RunToTaskbar
+    Add-RunToTaskbarPin
     Restart-Explorer
     Open-FileExplorerOptions
 
