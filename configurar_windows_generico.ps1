@@ -148,29 +148,35 @@ function Restart-Explorer {
     } -ContinueOnError
 }
 
-function Set-MouseSettings {
+function Set-MouseSpeed {
     Invoke-Safely "Configurando velocidade do cursor para o máximo" {
         Set-RegistryValueIfNeeded -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseSensitivity' -Value '20' -Type ([Microsoft.Win32.RegistryValueKind]::String)
-    }
 
-    Invoke-Safely "Configurando rolagem do mouse para 6 linhas" {
-        Set-RegistryValueIfNeeded -Path 'HKCU:\Control Panel\Desktop' -Name 'WheelScrollLines' -Value '6' -Type ([Microsoft.Win32.RegistryValueKind]::String)
-    }
-
-    Invoke-Safely "Validando configuração do mouse" {
         $mouseSensitivity = (Get-ItemProperty -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseSensitivity' -ErrorAction Stop).MouseSensitivity
-        $wheelLines = (Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'WheelScrollLines' -ErrorAction Stop).WheelScrollLines
-
         if ($mouseSensitivity -ne '20') {
             throw "A velocidade do cursor não ficou em 20."
         }
 
+        Write-Log "Velocidade do cursor confirmada em 20." 'OK'
+    }
+}
+
+function Set-MouseScrollLines {
+    Invoke-Safely "Configurando rolagem do mouse para 6 linhas" {
+        Set-RegistryValueIfNeeded -Path 'HKCU:\Control Panel\Desktop' -Name 'WheelScrollLines' -Value '6' -Type ([Microsoft.Win32.RegistryValueKind]::String)
+
+        $wheelLines = (Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'WheelScrollLines' -ErrorAction Stop).WheelScrollLines
         if ($wheelLines -ne '6') {
             throw "A rolagem de linhas não ficou em 6."
         }
 
-        Write-Log "Velocidade do cursor confirmada em 20 e rolagem confirmada em 6 linhas." 'OK'
+        Write-Log "Rolagem do mouse confirmada em 6 linhas." 'OK'
     }
+}
+
+function Set-MouseSettings {
+    Set-MouseSpeed
+    Set-MouseScrollLines
 }
 
 function Open-FileExplorerOptions {
