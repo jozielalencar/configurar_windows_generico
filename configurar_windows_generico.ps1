@@ -1,3 +1,6 @@
+#Requires -Version 5.1
+#Requires -RunAsAdministrator
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -16,30 +19,6 @@ function Write-Log {
     }
 
     Write-Host "[$timestamp] [$Level] $Message" -ForegroundColor $color
-}
-
-function Test-IsAdministrator {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
-function Ensure-Elevated {
-    if (Test-IsAdministrator) {
-        return
-    }
-
-    Write-Log "Script não está em modo administrador. Solicitando elevação..." 'WARN'
-
-    if (-not $PSCommandPath) {
-        throw "Não foi possível elevar automaticamente porque o script não está sendo executado a partir de um arquivo."
-    }
-
-    $quotedPath = '"' + $PSCommandPath + '"'
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File $quotedPath"
-
-    Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -Verb RunAs -WindowStyle Normal
-    exit
 }
 
 function Invoke-Safely {
@@ -489,8 +468,6 @@ function Pin-RunToTaskbar {
 }
 
 try {
-    Ensure-Elevated
-
     Write-Log "Iniciando script..." 'INFO'
 
     $appxApps = @(
