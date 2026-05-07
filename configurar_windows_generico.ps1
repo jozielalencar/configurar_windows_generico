@@ -467,49 +467,36 @@ function Pin-RunToTaskbar {
     }
 }
 
+function Load-ConfigFromJson {
+    param(
+        [Parameter(Mandatory = $true)][string]$ConfigPath
+    )
+
+    if (-not (Test-Path -Path $ConfigPath)) {
+        throw "Arquivo de configuração não encontrado: $ConfigPath"
+    }
+
+    try {
+        $config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+        Write-Log "Configuração carregada de: $ConfigPath" 'OK'
+        return $config
+    }
+    catch {
+        throw "Erro ao carregar configuração JSON: $($_.Exception.Message)"
+    }
+}
+
 try {
     Write-Log "Iniciando script..." 'INFO'
 
-    $appxApps = @(
-        "Microsoft.Edge"
-        "Microsoft.XboxApp"
-        "Microsoft.XboxGamingOverlay"
-        "Microsoft.MicrosoftSolitaireCollection"
-        "Microsoft.Office.OneNote"
-        "Microsoft.MSPaint"
-        "Microsoft.SkypeApp"
-        "Microsoft.549981C3F5F10"
-        "Microsoft.BingWeather"
-        "Microsoft.BingNews"
-        "Microsoft.MixedReality.Portal"
-        "Microsoft.WindowsFeedbackHub"
-        "Microsoft.MicrosoftTeams"
-        "Microsoft.Microsoft3DViewer"
-        "Microsoft.Office.Project"
-        "Microsoft.Office.Publisher"
-        "Microsoft.365Copilot"
-        "Microsoft.OneDrive"
-        "Microsoft.LinkedIn"
-        "Microsoft.Clipchamp"
-        "Microsoft.Todos"
-        "Microsoft.GamingApp"
-        "Microsoft.Bing"
-        "Microsoft.WindowsPay"
-        "Microsoft.XboxSpeechToTextOverlay"
-        "Microsoft.XboxIdentityProvider"
-        "Microsoft.XboxLive"
-    )
+    # Define o caminho do arquivo de configuração
+    $scriptDir = Split-Path -Parent $PSCommandPath
+    $configPath = Join-Path $scriptDir "config.json"
 
-    $packagesToInstall = @(
-        "Google.Chrome"
-        "Mozilla.Firefox"
-        "SumatraPDF.SumatraPDF"
-        "RevoUninstaller.RevoUninstaller"
-        "Microsoft.LanguageExperiencePack.ja-jp"
-        "RARLab.WinRAR"
-        "AnyDesk.AnyDesk"
-        "winaero.tweaker"
-    )
+    # Carrega configuração do JSON
+    $config = Load-ConfigFromJson -ConfigPath $configPath
+    $appxApps = $config.remove
+    $packagesToInstall = $config.install
 
     Remove-AppxPackagesSafe -PackageNames $appxApps
 

@@ -1,0 +1,41 @@
+{
+  "remove": [
+    "Microsoft.Edge",
+    "Microsoft.XboxApp",
+    "Microsoft.XboxGamingOverlay",
+    "Microsoft.MicrosoftSolitaireCollection",
+    "Microsoft.Office.OneNote",
+    "Microsoft.MSPaint",
+    "Microsoft.SkypeApp",
+    "Microsoft.549981C3F5F10",
+    "Microsoft.BingWeather",
+    "Microsoft.BingNews",
+    "Microsoft.MixedReality.Portal",
+    "Microsoft.WindowsFeedbackHub",
+    "Microsoft.MicrosoftTeams",
+    "Microsoft.Microsoft3DViewer",
+    "Microsoft.Office.Project",
+    "Microsoft.Office.Publisher",
+    "Microsoft.365Copilot",
+    "Microsoft.OneDrive",
+    "Microsoft.LinkedIn",
+    "Microsoft.Clipchamp",
+    "Microsoft.Todos",
+    "Microsoft.GamingApp",
+    "Microsoft.Bing",
+    "Microsoft.WindowsPay",
+    "Microsoft.XboxSpeechToTextOverlay",
+    "Microsoft.XboxIdentityProvider",
+    "Microsoft.XboxLive"
+  ],
+  "install": [
+    "Google.Chrome",
+    "Mozilla.Firefox",
+    "SumatraPDF.SumatraPDF",
+    "RevoUninstaller.RevoUninstaller",
+    "Microsoft.LanguageExperiencePack.ja-jp",
+    "RARLab.WinRAR",
+    "AnyDesk.AnyDesk",
+    "winaero.tweaker"
+  ]
+}
