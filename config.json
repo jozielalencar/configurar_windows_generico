@@ -38,6 +38,6 @@
     "AnyDesk.AnyDesk",
     "winaero.tweaker",
     "Microsoft.SQLServer.2012.NativeClient",
-    "Microsoft.ReportViewer.2015"
+    "Microsoft.ReportViewer.2015.Runtime",
   ]
 }
