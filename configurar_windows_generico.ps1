@@ -529,9 +529,16 @@ try {
     )
 
     Remove-AppxPackagesSafe -PackageNames $appxApps
-    Ensure-Winget
-    Update-AllPackagesWithWinget
-    Install-WingetPackagesIfMissing -PackageIds $packagesToInstall
+
+    if (-not (Test-Connection -ComputerName "8.8.8.8" -Count 1 -Quiet)) {
+        Write-Log "Sem conexão com a internet. Pulando instalação de pacotes." 'WARN'
+    }
+    else {
+        Ensure-Winget
+        Update-AllPackagesWithWinget
+        Install-WingetPackagesIfMissing -PackageIds $packagesToInstall
+    }
+
     Set-MouseSettings
     Pin-RunToTaskbar
     Restart-Explorer
