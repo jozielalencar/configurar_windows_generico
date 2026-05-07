@@ -465,8 +465,31 @@ function Add-RunToTaskbarPin {
             }
         }
         else {
-            Write-Log "Não encontrei a opção 'Fixar na barra de tarefas'. Talvez o Windows tenha bloqueado esse método." 'WARN'
-            Write-Log "Atalho criado em: $shortcutPath" 'INFO'
+            Write-Log "Não encontrei a opção 'Fixar na barra de tarefas'. Tentando fallback direto via pasta de itens fixados." 'WARN'
+
+            if (-not (Test-Path -Path $taskbarPins)) {
+                New-Item -Path $taskbarPins -ItemType Directory -Force | Out-Null
+            }
+
+            $taskbarShortcutPath = Join-Path $taskbarPins $shortcutName
+
+            try {
+                Copy-Item -Path $shortcutPath -Destination $taskbarShortcutPath -Force
+                Start-Sleep -Milliseconds 800
+                Invoke-ExplorerRefresh
+
+                if (Test-Path $taskbarShortcutPath) {
+                    Write-Log "'Executar' fixado na barra de tarefas via fallback." 'OK'
+                }
+                else {
+                    Write-Log "Fallback de fixação criou o atalho mas não confirmou fixação." 'WARN'
+                    Write-Log "Atalho criado em: $shortcutPath" 'INFO'
+                }
+            }
+            catch {
+                Write-Log "Fallback de fixação falhou: $($_.Exception.Message)" 'WARN'
+                Write-Log "Atalho criado em: $shortcutPath" 'INFO'
+            }
         }
     }
 }
