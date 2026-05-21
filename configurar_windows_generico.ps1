@@ -445,17 +445,41 @@ function Add-RunToTaskbarPin {
 
         $pinVerbs = @(
             "Fixar na barra de tarefas",
+            "Fixar na Barra de Tarefas",
             "Pin to taskbar",
-            "Pin to Taskbar"
+            "Pin to Taskbar",
+            "Pin na barra de tarefas",
+            "Pin to Tas&kbar"
         )
 
-        $verb = $item.Verbs() | Where-Object {
-            $cleanName = $_.Name.Replace("&", "").Trim()
-            $pinVerbs -contains $cleanName
+        $verb = $item.Verbs() | ForEach-Object {
+            $name = $_.Name -as [string]
+            if (-not $name) {
+                return
+            }
+
+            $cleanName = $name.Replace("&", "").Trim()
+            [PSCustomObject]@{
+                Verb      = $_
+                CleanName = $cleanName
+            }
+        } | Where-Object {
+            $pinVerbs -contains $_.CleanName -or
+            $_.CleanName -match '(?i)\b(pin|fixar)\b.*\b(taskbar|barra)\b' -or
+            $_.CleanName -match '(?i)\b(taskbar|barra)\b.*\b(pin|fixar)\b'
         } | Select-Object -First 1
 
+        if (-not $verb) {
+            $availableVerbNames = $item.Verbs() | ForEach-Object {
+                $name = $_.Name -as [string]
+                if ($name) { $name.Replace("&", "").Trim() }
+            } | Where-Object { $_ }
+
+            Write-Log "Verbos disponíveis: $($availableVerbNames -join '; ')" 'INFO'
+        }
+
         if ($verb) {
-            $verb.DoIt()
+            $verb.Verb.DoIt()
             Start-Sleep -Milliseconds 800
 
             if (Test-Path (Join-Path $taskbarPins $shortcutName)) {
