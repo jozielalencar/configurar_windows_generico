@@ -121,6 +121,16 @@ function Invoke-ExplorerRefresh {
     [void][WinAPI.NativeMethods]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 0x0002, 5000, [ref]$result)
 }
 
+function Set-ExplorerStartFolder {
+    Invoke-Safely "Definindo pasta de abertura do Explorer para Downloads" {
+        Set-ItemProperty `
+            -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" `
+            -Name "LaunchTo" `
+            -Type DWord `
+            -Value 3
+    }
+}
+
 function Restart-Explorer {
     Invoke-Safely "Reiniciando o Explorer para aplicar alterações" {
         Get-Process -Name explorer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -130,6 +140,7 @@ function Restart-Explorer {
         Invoke-ExplorerRefresh
     } -ContinueOnError
 }
+
 
 function Set-MouseSpeed {
     Invoke-Safely "Configurando velocidade do cursor para o máximo" {
@@ -608,6 +619,7 @@ try {
     }
 
     Set-MouseSettings
+    Set-ExplorerStartFolder
     Add-RunToTaskbarPin
     Restart-Explorer
 
