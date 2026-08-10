@@ -131,6 +131,59 @@ function Set-ExplorerStartFolder {
     }
 }
 
+function Set-WallpaperToImage {
+    Invoke-Safely "Verificando e ajustando fundo de tela para modo imagem" {
+        $wallpaperPath = "HKCU:\Control Panel\Desktop"
+        $wallpaperValue = $null
+        
+        try {
+            $wallpaperValue = (Get-ItemProperty -Path $wallpaperPath -Name "Wallpaper" -ErrorAction SilentlyContinue).Wallpaper
+        }
+        catch {
+            $wallpaperValue = $null
+        }
+
+        # Verifica se há uma imagem configurada e se o arquivo existe
+        $currentWallpaperValid = $false
+        if ($wallpaperValue -and (Test-Path -Path $wallpaperValue)) {
+            $currentWallpaperValid = $true
+            Write-Log "Fundo de tela atual é uma imagem válida: $wallpaperValue" 'INFO'
+        }
+        else {
+            Write-Log "Fundo de tela não é uma imagem válida ou está vazio." 'WARN'
+        }
+
+        # Se não for uma imagem válida, definir para uma imagem padrão do Windows
+        if (-not $currentWallpaperValid) {
+            $defaultWallpapers = @(
+                "C:\Windows\Web\Wallpaper\Windows\img0.jpg",
+                "C:\Windows\Web\Wallpaper\Windows\img1.jpg",
+                "C:\Windows\Web\Wallpaper\Windows\Windows.bmp"
+            )
+
+            $selectedWallpaper = $null
+            foreach ($wallpaper in $defaultWallpapers) {
+                if (Test-Path -Path $wallpaper) {
+                    $selectedWallpaper = $wallpaper
+                    break
+                }
+            }
+
+            if ($selectedWallpaper) {
+                Set-ItemProperty -Path $wallpaperPath -Name "Wallpaper" -Value $selectedWallpaper -Type String -Force
+                Set-ItemProperty -Path $wallpaperPath -Name "WallpaperStyle" -Value "10" -Type String -Force
+                Set-ItemProperty -Path $wallpaperPath -Name "TileWallpaper" -Value "0" -Type String -Force
+
+                Write-Log "Fundo de tela alterado para: $selectedWallpaper" 'INFO'
+                Invoke-ExplorerRefresh
+            }
+            else {
+                Write-Log "Nenhuma imagem padrão do Windows foi encontrada." 'WARN'
+            }
+        }
+    }
+}
+
 function Restart-Explorer {
     Invoke-Safely "Reiniciando o Explorer para aplicar alterações" {
         Get-Process -Name explorer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -620,6 +673,7 @@ try {
 
     Set-MouseSettings
     Set-ExplorerStartFolder
+    Set-WallpaperToImage
     Add-RunToTaskbarPin
     Restart-Explorer
 
