@@ -162,11 +162,6 @@ function Set-MouseSettings {
     Set-MouseScrollLines
 }
 
-function Open-FileExplorerOptions {
-    Invoke-Safely "Abrindo Opções do Explorador de Arquivos" {
-        Start-Process "control.exe" -ArgumentList "folders"
-    }
-}
 
 function Get-WingetPathFromAppInstaller {
     $package = Get-AppxPackage -Name 'Microsoft.DesktopAppInstaller' -AllUsers -ErrorAction SilentlyContinue |
@@ -615,7 +610,6 @@ try {
     Set-MouseSettings
     Add-RunToTaskbarPin
     Restart-Explorer
-    Open-FileExplorerOptions
 
     Write-Log "Script concluído com sucesso." 'OK'
 }
