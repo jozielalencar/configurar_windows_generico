@@ -207,6 +207,50 @@ function Disable-WindowsSpotlightCompletely {
     } -ContinueOnError
 }
 
+function Remove-ContentDeliveryManagerForCurrentUser {
+    Invoke-Safely "Removendo Microsoft.Windows.ContentDeliveryManager do usuário atual" {
+        $pkg = Get-AppxPackage -Name 'Microsoft.Windows.ContentDeliveryManager' -ErrorAction SilentlyContinue
+        if (-not $pkg) {
+            Write-Log "Pacote ContentDeliveryManager não encontrado para o usuário atual." 'INFO'
+            return
+        }
+
+        try {
+            Remove-AppxPackage -Package $pkg.PackageFullName -ErrorAction Stop
+            Write-Log "Pacote removido para usuário atual: $($pkg.PackageFullName)" 'OK'
+        }
+        catch {
+            Write-Log "Falha ao remover pacote para usuário atual: $($_.Exception.Message)" 'ERROR'
+            throw
+        }
+    } -ContinueOnError
+}
+
+function Rename-ContentDeliveryManagerSystemAppFallback {
+    param(
+        [string]$SystemAppPath = 'C:\Windows\SystemApps\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy'
+    )
+
+    Invoke-Safely "Renomeando SystemApp ContentDeliveryManager como fallback" {
+        if (-not (Test-Path -Path $SystemAppPath)) {
+            Write-Log "Pasta SystemApp não encontrada: $SystemAppPath" 'WARN'
+            return
+        }
+
+        $timestamp = (Get-Date).ToString('yyyyMMddHHmmss')
+        $backupPath = "$SystemAppPath.disabled.$timestamp"
+
+        try {
+            Move-Item -Path $SystemAppPath -Destination $backupPath -Force -ErrorAction Stop
+            Write-Log "SystemApp renomeado para: $backupPath (backup)." 'OK'
+        }
+        catch {
+            Write-Log "Falha ao renomear SystemApp: $($_.Exception.Message)" 'ERROR'
+            throw
+        }
+    } -ContinueOnError
+}
+
 function Set-WallpaperToImage {
     Invoke-Safely "Verificando e ajustando fundo de tela para modo imagem" {
         $wallpaperPath = "HKCU:\Control Panel\Desktop"
@@ -877,6 +921,14 @@ try {
     Set-MouseSettings
     Set-ExplorerStartFolder
     Disable-WindowsSpotlightCompletely
+    # Ação agressiva aprovada pelo usuário: tentar remover o Appx apenas para o usuário atual
+    Remove-ContentDeliveryManagerForCurrentUser
+    # Se o pacote ainda existir no SystemApps (componente de sistema), tente renomear como fallback
+    $systemAppPath = Join-Path $env:WinDir "SystemApps\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy"
+    if (Test-Path -Path $systemAppPath) {
+        Write-Log "SystemApp do ContentDeliveryManager detectado em: $systemAppPath. Tentando renomear como fallback." 'WARN'
+        Rename-ContentDeliveryManagerSystemAppFallback -SystemAppPath $systemAppPath
+    }
     Set-WallpaperToImage
     Add-RunToTaskbarPin
     Restart-Explorer
