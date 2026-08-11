@@ -146,50 +146,50 @@ function Set-WallpaperToImage {
             $wallpaperValue = $null
         }
 
-        # Verifica se há uma imagem configurada e se o arquivo existe
-        $currentWallpaperValid = $false
-        if ($wallpaperValue -and (Test-Path -Path $wallpaperValue)) {
-            $currentWallpaperValid = $true
-            Write-Log "Fundo de tela atual é uma imagem válida: $wallpaperValue" 'INFO'
-        }
-        else {
-            Write-Log "Fundo de tela não é uma imagem válida ou está vazio." 'WARN'
-        }
+        # Seleciona uma imagem padrão do Windows para o papel de parede
+        $defaultWallpapers = @(
+            "C:\Windows\Web\Wallpaper\Windows\img0.jpg",
+            "C:\Windows\Web\Wallpaper\Windows\img1.jpg",
+            "C:\Windows\Web\Wallpaper\Windows\Windows.bmp"
+        )
 
-        # Se não for uma imagem válida, definir para uma imagem padrão do Windows
-        if (-not $currentWallpaperValid) {
-            $defaultWallpapers = @(
-                "C:\Windows\Web\Wallpaper\Windows\img0.jpg",
-                "C:\Windows\Web\Wallpaper\Windows\img1.jpg",
-                "C:\Windows\Web\Wallpaper\Windows\Windows.bmp"
-            )
-
-            $selectedWallpaper = $null
-            foreach ($wallpaper in $defaultWallpapers) {
-                if (Test-Path -Path $wallpaper) {
-                    $selectedWallpaper = $wallpaper
-                    break
-                }
+        $selectedWallpaper = $null
+        foreach ($wallpaper in $defaultWallpapers) {
+            if (Test-Path -Path $wallpaper) {
+                $selectedWallpaper = $wallpaper
+                break
             }
+        }
 
-            if ($selectedWallpaper) {
-                Set-ItemProperty -Path $wallpaperPath -Name "Wallpaper" -Value $selectedWallpaper -Type String -Force
-                Set-ItemProperty -Path $wallpaperPath -Name "WallpaperStyle" -Value "10" -Type String -Force
-                Set-ItemProperty -Path $wallpaperPath -Name "TileWallpaper" -Value "0" -Type String -Force
+        if (-not $selectedWallpaper) {
+            Write-Log "Nenhuma imagem padrão do Windows foi encontrada." 'WARN'
+            return
+        }
 
-                # Atualiza a tela de fundo usando SystemParametersInfo para Windows 10
-                [WinAPI.NativeMethods]::SystemParametersInfo(0x0014, 0, $selectedWallpaper, 0x0001 -bor 0x0002) | Out-Null
-
-                # Aplica tema de desktop para forçar o ajuste automático do papel de parede
-                Set-WindowsThemeForWallpaper -WallpaperPath $selectedWallpaper
-
-                Write-Log "Fundo de tela alterado para: $selectedWallpaper" 'INFO'
-                Invoke-ExplorerRefresh
+        if ($wallpaperValue -and (Test-Path -Path $wallpaperValue)) {
+            if ($wallpaperValue -eq $selectedWallpaper) {
+                Write-Log "O papel de parede já está definido como: $selectedWallpaper" 'INFO'
             }
             else {
-                Write-Log "Nenhuma imagem padrão do Windows foi encontrada." 'WARN'
+                Write-Log "O papel de parede atual é válido, mas diferente do desejado: $wallpaperValue" 'INFO'
             }
         }
+        else {
+            Write-Log "Papel de parede atual não é válido ou não existe. Aplicando um novo." 'INFO'
+        }
+
+        Set-ItemProperty -Path $wallpaperPath -Name "Wallpaper" -Value $selectedWallpaper -Type String -Force
+        Set-ItemProperty -Path $wallpaperPath -Name "WallpaperStyle" -Value "10" -Type String -Force
+        Set-ItemProperty -Path $wallpaperPath -Name "TileWallpaper" -Value "0" -Type String -Force
+
+        # Atualiza a tela de fundo usando SystemParametersInfo para Windows 10
+        [WinAPI.NativeMethods]::SystemParametersInfo(0x0014, 0, $selectedWallpaper, 0x0001 -bor 0x0002) | Out-Null
+
+        # Aplica tema de desktop para forçar o ajuste automático do papel de parede
+        Set-WindowsThemeForWallpaper -WallpaperPath $selectedWallpaper
+
+        Write-Log "Fundo de tela alterado para: $selectedWallpaper" 'INFO'
+        Invoke-ExplorerRefresh
     }
 }
 
@@ -213,6 +213,21 @@ DisplayName=Wallpaper Theme
 Wallpaper=$WallpaperPath
 TileWallpaper=0
 WallpaperStyle=10
+Pattern=
+
+[VisualStyles]
+Path=%SystemRoot%\Resources\Themes\aero\aero.msstyles
+ColorStyle=NormalColor
+Size=NormalSize
+ColorizationColor=0
+ColorizationAfterglow=0
+
+[Boot]
+Wallpaper=
+
+[Sounds]
+; Use the default Windows sound scheme
+[SoundRules]
 "@
 
         Set-Content -Path $themeFile -Value $themeContent -Encoding Unicode
@@ -221,11 +236,51 @@ WallpaperStyle=10
         Set-ItemProperty -Path $themeRegistryPath -Name 'CurrentTheme' -Value $themeFile -Type String -Force
         Set-ItemProperty -Path $themeRegistryPath -Name 'LastLoadedTheme' -Value $themeFile -Type String -Force
 
-        Start-Process -FilePath $themeFile | Out-Null
-        Start-Sleep -Seconds 1
+        try {
+            Start-Process -FilePath $themeFile | Out-Null
+        }
+        catch {
+            Write-Log "Falha ao aplicar o tema via Start-Process: $($_.Exception.Message)" 'WARN'
+        }
 
+        Start-Sleep -Seconds 2
         [WinAPI.NativeMethods]::SystemParametersInfo(0x0014, 0, $WallpaperPath, 0x0001 -bor 0x0002) | Out-Null
+        Set-WallpaperViaDesktopWallpaperApi -WallpaperPath $WallpaperPath
         Invoke-ExplorerRefresh
+    }
+}
+
+function Set-WallpaperViaDesktopWallpaperApi {
+    param(
+        [Parameter(Mandatory = $true)][string]$WallpaperPath
+    )
+
+    Invoke-Safely "Definindo papel de parede via DesktopWallpaper API" {
+        try {
+            $desktopWallpaper = New-Object -ComObject "Shell.DesktopWallpaper"
+        }
+        catch {
+            throw "DesktopWallpaper COM não está disponível neste sistema: $($_.Exception.Message)"
+        }
+
+        $monitorCount = $desktopWallpaper.GetMonitorDevicePathCount()
+
+        if ($monitorCount -gt 0) {
+            for ($i = 0; $i -lt $monitorCount; $i++) {
+                $monitorId = $desktopWallpaper.GetMonitorDevicePathAt($i)
+                $desktopWallpaper.SetWallpaper($monitorId, $WallpaperPath)
+            }
+        }
+        else {
+            $desktopWallpaper.SetWallpaper($null, $WallpaperPath)
+        }
+
+        try {
+            $desktopWallpaper.SetPosition(2)
+        }
+        catch {
+            # Caso a posição não seja suportada, apenas ignore.
+        }
     } -ContinueOnError
 }
 
