@@ -246,6 +246,39 @@ function Hide-SpotlightImageIcon {
     } -ContinueOnError
 }
 
+function Set-DesktopIcons {
+    Invoke-Safely "Ajustando ícones da área de trabalho (apenas Lixeira visível)" {
+        $hidePaths = @(
+            'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel',
+            'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\ClassicStartMenu'
+        )
+
+        $iconsToHide = @{
+            '{20D04FE0-3AEA-1069-A2D8-08002B30309D}' = 1 # This PC
+            '{59031a47-3f72-44a7-89c5-5595fe6b30ee}' = 1 # User Files
+            '{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}' = 1 # Control Panel
+            '{208D2C60-3AEA-1069-A2D7-08002B30309D}' = 1 # Network
+        }
+
+        foreach ($path in $hidePaths) {
+            if (-not (Test-Path -Path $path)) {
+                New-Item -Path $path -Force | Out-Null
+            }
+
+            foreach ($guid in $iconsToHide.Keys) {
+                Set-RegistryValueIfNeeded -Path $path -Name $guid -Value ([int]$iconsToHide[$guid]) -Type ([Microsoft.Win32.RegistryValueKind]::DWord)
+            }
+
+            # Garantir que a Lixeira esteja visível
+            $recycleGuid = '{645FF040-5081-101B-9F08-00AA002F954E}'
+            Set-RegistryValueIfNeeded -Path $path -Name $recycleGuid -Value 0 -Type ([Microsoft.Win32.RegistryValueKind]::DWord)
+        }
+
+        # Força refresh do Explorer para aplicar as mudanças
+        Restart-Explorer
+    } -ContinueOnError
+}
+
 function Set-WallpaperToImage {
     Invoke-Safely "Verificando e ajustando fundo de tela para modo imagem" {
         $wallpaperPath = "HKCU:\Control Panel\Desktop"
@@ -918,6 +951,8 @@ try {
     Disable-WindowsSpotlightCompletely
     # Oculta o ícone 'Saiba mais sobre essa imagem' (solução testada pelo usuário)
     Hide-SpotlightImageIcon
+        # Ajusta ícones da área de trabalho (apenas Lixeira visível)
+        Set-DesktopIcons
     Set-WallpaperToImage
     Add-RunToTaskbarPin
     Restart-Explorer
