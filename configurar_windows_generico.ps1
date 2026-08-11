@@ -95,7 +95,8 @@ function Import-NativeMethods {
         return
     }
 
-    Add-Type -TypeDefinition @"
+    try {
+        Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 
@@ -103,17 +104,22 @@ namespace WinAPI
 {
     public static class NativeMethods
     {
-        [DllImport("shell32.dll")]
+        [DllImport("shell32.dll", CharSet=CharSet.Auto)]
         public static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
 
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
-        public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+        public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
 
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, string pvParam, uint fWinIni);
     }
 }
-"@
+'@
+    }
+    catch {
+        Write-Log "Falha ao registrar métodos nativos: $($_.Exception.Message)" 'ERROR'
+        throw
+    }
 }
 
 function Invoke-ExplorerRefresh {
@@ -121,7 +127,8 @@ function Invoke-ExplorerRefresh {
 
     [UIntPtr]$result = [UIntPtr]::Zero
     [WinAPI.NativeMethods]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
-    [void][WinAPI.NativeMethods]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 0x0002, 5000, [ref]$result)
+    # Envia WM_SETTINGCHANGE para o broadcast handle; passa lParam como IntPtr::Zero
+    [void][WinAPI.NativeMethods]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, [IntPtr]::Zero, 0x0002, 5000, [ref]$result)
 }
 
 function Set-ExplorerStartFolder {
