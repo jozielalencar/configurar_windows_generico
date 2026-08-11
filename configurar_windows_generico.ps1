@@ -255,8 +255,27 @@ Wallpaper=
 
         Start-Sleep -Seconds 2
         Import-NativeMethods
-        [WinAPI.NativeMethods]::SystemParametersInfo(0x0014, 0, $WallpaperPath, 0x0001 -bor 0x0002) | Out-Null
-        Set-WallpaperViaDesktopWallpaperApi -WallpaperPath $WallpaperPath
+        try {
+            [WinAPI.NativeMethods]::SystemParametersInfo(0x0014, 0, $WallpaperPath, 0x0001 -bor 0x0002) | Out-Null
+        }
+        catch {
+            Write-Log "SystemParametersInfo falhou: $($_.Exception.Message)" 'WARN'
+        }
+
+        try {
+            Set-WallpaperViaDesktopWallpaperApi -WallpaperPath $WallpaperPath
+        }
+        catch {
+            Write-Log "DesktopWallpaper COM não pôde ser usado: $($_.Exception.Message)" 'WARN'
+            Write-Log "Tentando fallback via rundll32 e refresh de sistema." 'INFO'
+            try {
+                Start-Process -FilePath 'rundll32.exe' -ArgumentList 'user32.dll,UpdatePerUserSystemParameters' -NoNewWindow -Wait -ErrorAction Stop | Out-Null
+            }
+            catch {
+                Write-Log "Falha ao executar rundll32: $($_.Exception.Message)" 'WARN'
+            }
+        }
+
         Invoke-ExplorerRefresh
     }
 }
@@ -271,26 +290,33 @@ function Set-WallpaperViaDesktopWallpaperApi {
             $desktopWallpaper = New-Object -ComObject "Shell.DesktopWallpaper"
         }
         catch {
-            throw "DesktopWallpaper COM não está disponível neste sistema: $($_.Exception.Message)"
-        }
-
-        $monitorCount = $desktopWallpaper.GetMonitorDevicePathCount()
-
-        if ($monitorCount -gt 0) {
-            for ($i = 0; $i -lt $monitorCount; $i++) {
-                $monitorId = $desktopWallpaper.GetMonitorDevicePathAt($i)
-                $desktopWallpaper.SetWallpaper($monitorId, $WallpaperPath)
-            }
-        }
-        else {
-            $desktopWallpaper.SetWallpaper($null, $WallpaperPath)
+            Write-Log "DesktopWallpaper COM não está disponível neste sistema: $($_.Exception.Message)" 'WARN'
+            throw
         }
 
         try {
-            $desktopWallpaper.SetPosition(2)
+            $monitorCount = $desktopWallpaper.GetMonitorDevicePathCount()
+
+            if ($monitorCount -gt 0) {
+                for ($i = 0; $i -lt $monitorCount; $i++) {
+                    $monitorId = $desktopWallpaper.GetMonitorDevicePathAt($i)
+                    $desktopWallpaper.SetWallpaper($monitorId, $WallpaperPath)
+                }
+            }
+            else {
+                $desktopWallpaper.SetWallpaper($null, $WallpaperPath)
+            }
+
+            try {
+                $desktopWallpaper.SetPosition(2)
+            }
+            catch {
+                # Caso a posição não seja suportada, apenas ignore.
+            }
         }
         catch {
-            # Caso a posição não seja suportada, apenas ignore.
+            Write-Log "Erro usando DesktopWallpaper COM: $($_.Exception.Message)" 'WARN'
+            throw
         }
     } -ContinueOnError
 }
