@@ -180,6 +180,9 @@ function Set-WallpaperToImage {
                 # Atualiza a tela de fundo usando SystemParametersInfo para Windows 10
                 [WinAPI.NativeMethods]::SystemParametersInfo(0x0014, 0, $selectedWallpaper, 0x0001 -bor 0x0002) | Out-Null
 
+                # Aplica tema de desktop para forçar o ajuste automático do papel de parede
+                Set-WindowsThemeForWallpaper -WallpaperPath $selectedWallpaper
+
                 Write-Log "Fundo de tela alterado para: $selectedWallpaper" 'INFO'
                 Invoke-ExplorerRefresh
             }
@@ -188,6 +191,42 @@ function Set-WallpaperToImage {
             }
         }
     }
+}
+
+function Set-WindowsThemeForWallpaper {
+    param(
+        [Parameter(Mandatory = $true)][string]$WallpaperPath
+    )
+
+    Invoke-Safely "Aplicando tema de desktop com o wallpaper" {
+        $themeDir = Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Themes"
+        if (-not (Test-Path -Path $themeDir)) {
+            New-Item -ItemType Directory -Path $themeDir -Force | Out-Null
+        }
+
+        $themeFile = Join-Path $themeDir "WallpaperTheme.theme"
+        $themeContent = @"
+[Theme]
+DisplayName=Wallpaper Theme
+; Gerado pelo script
+[Control Panel\Desktop]
+Wallpaper=$WallpaperPath
+TileWallpaper=0
+WallpaperStyle=10
+"@
+
+        Set-Content -Path $themeFile -Value $themeContent -Encoding Unicode
+
+        $themeRegistryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes'
+        Set-ItemProperty -Path $themeRegistryPath -Name 'CurrentTheme' -Value $themeFile -Type String -Force
+        Set-ItemProperty -Path $themeRegistryPath -Name 'LastLoadedTheme' -Value $themeFile -Type String -Force
+
+        Start-Process -FilePath $themeFile | Out-Null
+        Start-Sleep -Seconds 1
+
+        [WinAPI.NativeMethods]::SystemParametersInfo(0x0014, 0, $WallpaperPath, 0x0001 -bor 0x0002) | Out-Null
+        Invoke-ExplorerRefresh
+    } -ContinueOnError
 }
 
 function Restart-Explorer {
