@@ -207,47 +207,42 @@ function Disable-WindowsSpotlightCompletely {
     } -ContinueOnError
 }
 
-function Remove-ContentDeliveryManagerForCurrentUser {
-    Invoke-Safely "Removendo Microsoft.Windows.ContentDeliveryManager do usuário atual" {
-        $pkg = Get-AppxPackage -Name 'Microsoft.Windows.ContentDeliveryManager' -ErrorAction SilentlyContinue
-        if (-not $pkg) {
-            Write-Log "Pacote ContentDeliveryManager não encontrado para o usuário atual." 'INFO'
-            return
+function Hide-SpotlightImageIcon {
+    Invoke-Safely "Ocultando ícone 'Saiba mais sobre essa imagem' do Spotlight" {
+        # Remove o ícone "Saiba mais sobre essa imagem" do Windows Spotlight no Windows 10
+
+        $guid = "{2cc5ca98-6485-489a-920e-b3e88a6ccce3}"
+
+        $hidePath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel"
+        $nameSpacePath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Desktop\NameSpace\$guid"
+
+        # Cria a chave de ocultação, se necessário
+        if (-not (Test-Path $hidePath)) {
+            New-Item -Path $hidePath -Force | Out-Null
         }
 
+        # Manda o Windows ocultar o ícone
+        New-ItemProperty `
+            -Path $hidePath `
+            -Name $guid `
+            -PropertyType DWord `
+            -Value 1 `
+            -Force | Out-Null
+
+        # Remove a entrada do ícone do NameSpace
+        if (Test-Path $nameSpacePath) {
+            Remove-Item -Path $nameSpacePath -Recurse -Force
+        }
+
+        # Atualiza o Explorer
         try {
-            Remove-AppxPackage -Package $pkg.PackageFullName -ErrorAction Stop
-            Write-Log "Pacote removido para usuário atual: $($pkg.PackageFullName)" 'OK'
+            Stop-Process -Name explorer -Force -ErrorAction Stop
         }
         catch {
-            Write-Log "Falha ao remover pacote para usuário atual: $($_.Exception.Message)" 'ERROR'
-            throw
-        }
-    } -ContinueOnError
-}
-
-function Rename-ContentDeliveryManagerSystemAppFallback {
-    param(
-        [string]$SystemAppPath = 'C:\Windows\SystemApps\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy'
-    )
-
-    Invoke-Safely "Renomeando SystemApp ContentDeliveryManager como fallback" {
-        if (-not (Test-Path -Path $SystemAppPath)) {
-            Write-Log "Pasta SystemApp não encontrada: $SystemAppPath" 'WARN'
-            return
+            # ignore
         }
 
-        $timestamp = (Get-Date).ToString('yyyyMMddHHmmss')
-        $backupPath = "$SystemAppPath.disabled.$timestamp"
-
-        try {
-            Move-Item -Path $SystemAppPath -Destination $backupPath -Force -ErrorAction Stop
-            Write-Log "SystemApp renomeado para: $backupPath (backup)." 'OK'
-        }
-        catch {
-            Write-Log "Falha ao renomear SystemApp: $($_.Exception.Message)" 'ERROR'
-            throw
-        }
+        Start-Process explorer.exe
     } -ContinueOnError
 }
 
@@ -921,14 +916,8 @@ try {
     Set-MouseSettings
     Set-ExplorerStartFolder
     Disable-WindowsSpotlightCompletely
-    # Ação agressiva aprovada pelo usuário: tentar remover o Appx apenas para o usuário atual
-    Remove-ContentDeliveryManagerForCurrentUser
-    # Se o pacote ainda existir no SystemApps (componente de sistema), tente renomear como fallback
-    $systemAppPath = Join-Path $env:WinDir "SystemApps\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy"
-    if (Test-Path -Path $systemAppPath) {
-        Write-Log "SystemApp do ContentDeliveryManager detectado em: $systemAppPath. Tentando renomear como fallback." 'WARN'
-        Rename-ContentDeliveryManagerSystemAppFallback -SystemAppPath $systemAppPath
-    }
+    # Oculta o ícone 'Saiba mais sobre essa imagem' (solução testada pelo usuário)
+    Hide-SpotlightImageIcon
     Set-WallpaperToImage
     Add-RunToTaskbarPin
     Restart-Explorer
