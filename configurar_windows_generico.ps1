@@ -153,6 +153,9 @@ function Set-WallpaperToImage {
             $wallpaperValue = $null
         }
 
+            # Garante que os métodos nativos estejam registrados antes de usá-los
+            Import-NativeMethods
+
         # Seleciona uma imagem padrão do Windows para o papel de parede
         $defaultWallpapers = @(
             "C:\Windows\Web\Wallpaper\Windows\img0.jpg",
@@ -251,6 +254,7 @@ Wallpaper=
         }
 
         Start-Sleep -Seconds 2
+        Import-NativeMethods
         [WinAPI.NativeMethods]::SystemParametersInfo(0x0014, 0, $WallpaperPath, 0x0001 -bor 0x0002) | Out-Null
         Set-WallpaperViaDesktopWallpaperApi -WallpaperPath $WallpaperPath
         Invoke-ExplorerRefresh
