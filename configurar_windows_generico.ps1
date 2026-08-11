@@ -279,6 +279,29 @@ function Set-DesktopIcons {
     } -ContinueOnError
 }
 
+function Set-StartMenuPersonalization {
+    Invoke-Safely "Ajustando personalização do Menu Iniciar" {
+        $path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+
+        $pairs = @{
+            'Start_ShowMoreTiles' = 0
+            'Start_NotifyNewApps' = 0
+            'Start_ShowMostUsedApps' = 0
+            'Start_ShowSuggestions' = 0
+            'Start_ShowFullScreen' = 0
+            'Start_TrackDocs' = 0
+            'Start_ShowAccountNotifications' = 0
+        }
+
+        foreach ($name in $pairs.Keys) {
+            Set-RegistryValueIfNeeded -Path $path -Name $name -Value ([int]$pairs[$name]) -Type ([Microsoft.Win32.RegistryValueKind]::DWord)
+        }
+
+        # Força refresh do Explorer para aplicar as mudanças
+        Restart-Explorer
+    } -ContinueOnError
+}
+
 function Set-WallpaperToImage {
     Invoke-Safely "Verificando e ajustando fundo de tela para modo imagem" {
         $wallpaperPath = "HKCU:\Control Panel\Desktop"
@@ -951,8 +974,10 @@ try {
     Disable-WindowsSpotlightCompletely
     # Oculta o ícone 'Saiba mais sobre essa imagem' (solução testada pelo usuário)
     Hide-SpotlightImageIcon
-        # Ajusta ícones da área de trabalho (apenas Lixeira visível)
-        Set-DesktopIcons
+    # Ajusta personalização do Menu Iniciar
+    Set-StartMenuPersonalization
+    # Ajusta ícones da área de trabalho (apenas Lixeira visível)
+    Set-DesktopIcons
     Set-WallpaperToImage
     Add-RunToTaskbarPin
     Restart-Explorer
