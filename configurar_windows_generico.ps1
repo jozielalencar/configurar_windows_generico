@@ -108,6 +108,9 @@ namespace WinAPI
 
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, string pvParam, uint fWinIni);
     }
 }
 "@
@@ -173,6 +176,9 @@ function Set-WallpaperToImage {
                 Set-ItemProperty -Path $wallpaperPath -Name "Wallpaper" -Value $selectedWallpaper -Type String -Force
                 Set-ItemProperty -Path $wallpaperPath -Name "WallpaperStyle" -Value "10" -Type String -Force
                 Set-ItemProperty -Path $wallpaperPath -Name "TileWallpaper" -Value "0" -Type String -Force
+
+                # Atualiza a tela de fundo usando SystemParametersInfo para Windows 10
+                [WinAPI.NativeMethods]::SystemParametersInfo(0x0014, 0, $selectedWallpaper, 0x0001 -bor 0x0002) | Out-Null
 
                 Write-Log "Fundo de tela alterado para: $selectedWallpaper" 'INFO'
                 Invoke-ExplorerRefresh
