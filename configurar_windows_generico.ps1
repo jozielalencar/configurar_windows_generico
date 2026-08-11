@@ -141,6 +141,27 @@ function Set-ExplorerStartFolder {
     }
 }
 
+function Disable-WindowsSpotlight {
+    Invoke-Safely "Desativando Windows Spotlight/Destaques" {
+        $cdm = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+
+        $pairs = @{
+            'RotatingLockScreenEnabled' = 0
+            'RotatingLockScreenOverlayEnabled' = 0
+            'SystemPaneSuggestionsEnabled' = 0
+            'SubscribedContent-338389Enabled' = 0
+            'SubscribedContent-338388Enabled' = 0
+            'SubscribedContent-310093Enabled' = 0
+        }
+
+        foreach ($name in $pairs.Keys) {
+            Set-RegistryValueIfNeeded -Path $cdm -Name $name -Value ([int]$pairs[$name]) -Type ([Microsoft.Win32.RegistryValueKind]::DWord)
+        }
+
+        Write-Log "Windows Spotlight/Destaques ajustado (ContentDeliveryManager)." 'INFO'
+    } -ContinueOnError
+}
+
 function Set-WallpaperToImage {
     Invoke-Safely "Verificando e ajustando fundo de tela para modo imagem" {
         $wallpaperPath = "HKCU:\Control Panel\Desktop"
@@ -810,6 +831,7 @@ try {
 
     Set-MouseSettings
     Set-ExplorerStartFolder
+    Disable-WindowsSpotlight
     Set-WallpaperToImage
     Add-RunToTaskbarPin
     Restart-Explorer
