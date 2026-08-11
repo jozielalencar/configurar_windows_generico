@@ -283,9 +283,12 @@ function Set-StartMenuPersonalization {
     Invoke-Safely "Ajustando personalização do Menu Iniciar" {
         $path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
 
+        # Múltiplos nomes possíveis para a opção "aplicativos adicionados recentemente" em diferentes builds/localizações
         $pairs = @{
             'Start_ShowMoreTiles' = 0
             'Start_NotifyNewApps' = 0
+            'Start_NotifyNewAppsEnabled' = 0
+            'Start_ShowRecentlyAddedApps' = 0
             'Start_ShowMostUsedApps' = 0
             'Start_ShowSuggestions' = 0
             'Start_ShowFullScreen' = 0
@@ -294,7 +297,20 @@ function Set-StartMenuPersonalization {
         }
 
         foreach ($name in $pairs.Keys) {
-            Set-RegistryValueIfNeeded -Path $path -Name $name -Value ([int]$pairs[$name]) -Type ([Microsoft.Win32.RegistryValueKind]::DWord)
+            try {
+                $current = (Get-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue).$name
+            }
+            catch {
+                $current = $null
+            }
+
+            if ($current -ne $pairs[$name]) {
+                Set-RegistryValueIfNeeded -Path $path -Name $name -Value ([int]$pairs[$name]) -Type ([Microsoft.Win32.RegistryValueKind]::DWord)
+                Write-Log "Start menu: definido $name = $($pairs[$name])" 'INFO'
+            }
+            else {
+                Write-Log "Start menu: $name já igual a $current" 'INFO'
+            }
         }
 
         # Força refresh do Explorer para aplicar as mudanças
