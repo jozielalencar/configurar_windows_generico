@@ -162,6 +162,51 @@ function Disable-WindowsSpotlight {
     } -ContinueOnError
 }
 
+function Disable-WindowsSpotlightCompletely {
+    Invoke-Safely "Desativando Spotlight (limpeza completa)" {
+        # Repete e amplia as chaves do ContentDeliveryManager
+        $cdm = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+        $keys = @(
+            'RotatingLockScreenEnabled',
+            'RotatingLockScreenOverlayEnabled',
+            'SystemPaneSuggestionsEnabled',
+            'SubscribedContent-338389Enabled',
+            'SubscribedContent-338388Enabled',
+            'SubscribedContent-310093Enabled',
+            'SubscribedContent-353971Enabled',
+            'SubscribedContent-338090Enabled'
+        )
+
+        foreach ($k in $keys) {
+            Set-RegistryValueIfNeeded -Path $cdm -Name $k -Value 0 -Type ([Microsoft.Win32.RegistryValueKind]::DWord)
+        }
+
+        # Remove assets em cache para evitar reaparecimento
+        $assetsPath = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy\LocalState\Assets'
+        if (Test-Path -Path $assetsPath) {
+            try {
+                Get-ChildItem -Path $assetsPath -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+                Write-Log "Arquivos de assets do Spotlight removidos: $assetsPath" 'INFO'
+            }
+            catch {
+                Write-Log "Falha ao remover assets: $($_.Exception.Message)" 'WARN'
+            }
+        }
+
+        # Força reinício do host de experiência do Shell para aplicar alterações
+        try {
+            Get-Process -Name ShellExperienceHost -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 500
+        }
+        catch {
+            Write-Log "Não foi possível reiniciar ShellExperienceHost: $($_.Exception.Message)" 'WARN'
+        }
+
+        Restart-Explorer
+        Write-Log "Tentativa completa para desativar Spotlight executada." 'INFO'
+    } -ContinueOnError
+}
+
 function Set-WallpaperToImage {
     Invoke-Safely "Verificando e ajustando fundo de tela para modo imagem" {
         $wallpaperPath = "HKCU:\Control Panel\Desktop"
@@ -831,7 +876,7 @@ try {
 
     Set-MouseSettings
     Set-ExplorerStartFolder
-    Disable-WindowsSpotlight
+    Disable-WindowsSpotlightCompletely
     Set-WallpaperToImage
     Add-RunToTaskbarPin
     Restart-Explorer
