@@ -318,6 +318,18 @@ function Set-StartMenuPersonalization {
     } -ContinueOnError
 }
 
+function Disable-SetupSuggestions {
+    Invoke-Safely "Desativando 'Sugerir maneiras de terminar a configuração do computador'" {
+        $dword = [Microsoft.Win32.RegistryValueKind]::DWord
+
+        Set-RegistryValueIfNeeded -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement' `
+            -Name 'ScoobeSystemSettingEnabled' -Value 0 -Type $dword
+
+        Set-RegistryValueIfNeeded -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' `
+            -Name 'SubscribedContent-310093Enabled' -Value 0 -Type $dword
+    } -ContinueOnError
+}
+
 function Set-WallpaperToImage {
     Invoke-Safely "Verificando e ajustando fundo de tela para modo imagem" {
         $wallpaperPath = "HKCU:\Control Panel\Desktop"
@@ -992,6 +1004,8 @@ try {
     Hide-SpotlightImageIcon
     # Ajusta personalização do Menu Iniciar
     Set-StartMenuPersonalization
+    # Desativa "Sugerir maneiras de terminar a configuração do computador"
+    Disable-SetupSuggestions
     # Ajusta ícones da área de trabalho (apenas Lixeira visível)
     Set-DesktopIcons
     Set-WallpaperToImage
