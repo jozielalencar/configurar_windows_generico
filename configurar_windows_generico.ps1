@@ -318,6 +318,71 @@ function Set-StartMenuPersonalization {
     } -ContinueOnError
 }
 
+function New-SystemRestorePoint {
+    param(
+        [string]$Description = 'Antes de configurar_windows_generico'
+    )
+
+    Invoke-Safely "Criando ponto de restauração do sistema" {
+        $systemDrive = "$env:SystemDrive\"
+
+        # Serviços necessários para a criação do ponto (VSS e Shadow Copy Provider)
+        foreach ($svcName in @('VSS', 'swprv')) {
+            $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+            if ($null -ne $svc -and $svc.StartType -eq 'Disabled') {
+                Set-Service -Name $svcName -StartupType Manual
+                Write-Log "Serviço $svcName estava desativado; alterado para Manual." 'WARN'
+            }
+        }
+
+        # Habilita a Proteção do Sistema na unidade do Windows (desativada por padrão em muitas instalações)
+        Enable-ComputerRestore -Drive $systemDrive
+        Write-Log "Proteção do Sistema habilitada em $systemDrive" 'INFO'
+
+        # Garante espaço para as cópias de sombra (sem espaço o ponto não é criado)
+        try {
+            $vssOut = & vssadmin.exe Resize ShadowStorage "/For=$env:SystemDrive" "/On=$env:SystemDrive" '/MaxSize=5%' 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Log "vssadmin não ajustou o armazenamento de sombra (código $LASTEXITCODE): $($vssOut -join ' ')" 'WARN'
+            }
+        }
+        catch {
+            Write-Log "Falha ao ajustar armazenamento de sombra: $($_.Exception.Message)" 'WARN'
+        }
+
+        # O Windows bloqueia a criação de mais de um ponto a cada 24h (apenas emite um aviso, sem erro).
+        # Zera temporariamente a frequência mínima para permitir a criação.
+        $srKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+        $freqName = 'SystemRestorePointCreationFrequency'
+        $previousFreq = $null
+        try { $previousFreq = (Get-ItemProperty -Path $srKey -Name $freqName -ErrorAction Stop).$freqName } catch { }
+
+        $before = @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Where-Object { $_ }).Count
+
+        try {
+            New-ItemProperty -Path $srKey -Name $freqName -Value 0 -PropertyType DWord -Force | Out-Null
+            Checkpoint-Computer -Description $Description -RestorePointType 'MODIFY_SETTINGS' -WarningAction SilentlyContinue -WarningVariable cpWarn
+        }
+        finally {
+            if ($null -eq $previousFreq) {
+                Remove-ItemProperty -Path $srKey -Name $freqName -ErrorAction SilentlyContinue
+            }
+            else {
+                New-ItemProperty -Path $srKey -Name $freqName -Value $previousFreq -PropertyType DWord -Force | Out-Null
+            }
+        }
+
+        # Checkpoint-Computer não lança erro quando o ponto é ignorado; confirma pela contagem
+        $after = @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Where-Object { $_ }).Count
+        if ($after -le $before) {
+            $detail = if ($cpWarn) { ($cpWarn | ForEach-Object { $_.Message }) -join ' ' } else { 'nenhum ponto novo encontrado.' }
+            throw "O ponto de restauração não foi criado: $detail"
+        }
+
+        Write-Log "Ponto de restauração '$Description' criado." 'OK'
+    } -ContinueOnError
+}
+
 function Disable-SetupSuggestions {
     Invoke-Safely "Desativando 'Sugerir maneiras de terminar a configuração do computador'" {
         $dword = [Microsoft.Win32.RegistryValueKind]::DWord
@@ -980,6 +1045,9 @@ try {
     $config = Import-ConfigFromJson -ConfigPath $configPath
     $appxApps = $config.remove
     $packagesToInstall = $config.install
+
+    # Cria ponto de restauração antes de qualquer alteração no sistema
+    New-SystemRestorePoint
 
     Remove-AppxPackagesSafe -PackageNames $appxApps
 
