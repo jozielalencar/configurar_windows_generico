@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 #Requires -RunAsAdministrator
 
 param(
@@ -463,13 +463,21 @@ function Set-WindowsThemeForWallpaper {
     )
 
     Invoke-Safely "Aplicando tema de desktop com o wallpaper" {
-        $themeDir = Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Themes"
-        if (-not (Test-Path -Path $themeDir)) {
-            New-Item -ItemType Directory -Path $themeDir -Force | Out-Null
-        }
+        # No Windows 10 (build < 22000) abrir o .theme gerado exibe "Este tema não pode ser aplicado
+        # à área de trabalho", embora o papel de parede seja aplicado pelas APIs abaixo. Lá, usa só as APIs.
+        $isWindows10 = [Environment]::OSVersion.Version.Build -lt 22000
 
-        $themeFile = Join-Path $themeDir "WallpaperTheme.theme"
-        $themeContent = @"
+        if ($isWindows10) {
+            Write-Log "Windows 10 detectado: aplicando papel de parede sem abrir arquivo de tema." 'INFO'
+        }
+        else {
+            $themeDir = Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Themes"
+            if (-not (Test-Path -Path $themeDir)) {
+                New-Item -ItemType Directory -Path $themeDir -Force | Out-Null
+            }
+
+            $themeFile = Join-Path $themeDir "WallpaperTheme.theme"
+            $themeContent = @"
 [Theme]
 DisplayName=Wallpaper Theme
 ; Gerado pelo script
@@ -494,20 +502,22 @@ Wallpaper=
 [SoundRules]
 "@
 
-        Set-Content -Path $themeFile -Value $themeContent -Encoding Unicode
+            Set-Content -Path $themeFile -Value $themeContent -Encoding Unicode
 
-        $themeRegistryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes'
-        Set-ItemProperty -Path $themeRegistryPath -Name 'CurrentTheme' -Value $themeFile -Type String -Force
-        Set-ItemProperty -Path $themeRegistryPath -Name 'LastLoadedTheme' -Value $themeFile -Type String -Force
+            $themeRegistryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes'
+            Set-ItemProperty -Path $themeRegistryPath -Name 'CurrentTheme' -Value $themeFile -Type String -Force
+            Set-ItemProperty -Path $themeRegistryPath -Name 'LastLoadedTheme' -Value $themeFile -Type String -Force
 
-        try {
-            Start-Process -FilePath $themeFile | Out-Null
+            try {
+                Start-Process -FilePath $themeFile | Out-Null
+            }
+            catch {
+                Write-Log "Falha ao aplicar o tema via Start-Process: $($_.Exception.Message)" 'WARN'
+            }
+
+            Start-Sleep -Seconds 2
         }
-        catch {
-            Write-Log "Falha ao aplicar o tema via Start-Process: $($_.Exception.Message)" 'WARN'
-        }
 
-        Start-Sleep -Seconds 2
         Import-NativeMethods
         try {
             [WinAPI.NativeMethods]::SystemParametersInfo(0x0014, 0, $WallpaperPath, 0x0001 -bor 0x0002) | Out-Null
@@ -540,38 +550,74 @@ function Set-WallpaperViaDesktopWallpaperApi {
     )
 
     Invoke-Safely "Definindo papel de parede via DesktopWallpaper API" {
-        try {
-            $desktopWallpaper = New-Object -ComObject "Shell.DesktopWallpaper"
-        }
-        catch {
-            Write-Log "DesktopWallpaper COM não está disponível neste sistema: $($_.Exception.Message)" 'WARN'
-            throw
-        }
+        # IDesktopWallpaper não tem ProgID nem IDispatch ("Shell.DesktopWallpaper" não existe),
+        # então New-Object -ComObject falha com REGDB_E_CLASSNOTREG. Usa interop tipado via CLSID.
+        if (-not ('WinAPI.DesktopWallpaperHelper' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
 
-        try {
-            $monitorCount = $desktopWallpaper.GetMonitorDevicePathCount()
+namespace WinAPI
+{
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WallpaperRect { public int Left, Top, Right, Bottom; }
 
-            if ($monitorCount -gt 0) {
-                for ($i = 0; $i -lt $monitorCount; $i++) {
-                    $monitorId = $desktopWallpaper.GetMonitorDevicePathAt($i)
-                    $desktopWallpaper.SetWallpaper($monitorId, $WallpaperPath)
+    [ComImport, Guid("B92B56A9-8B55-4E14-9A89-0199BBB6F93B"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IDesktopWallpaper
+    {
+        void SetWallpaper([MarshalAs(UnmanagedType.LPWStr)] string monitorID, [MarshalAs(UnmanagedType.LPWStr)] string wallpaper);
+        [return: MarshalAs(UnmanagedType.LPWStr)] string GetWallpaper([MarshalAs(UnmanagedType.LPWStr)] string monitorID);
+        [return: MarshalAs(UnmanagedType.LPWStr)] string GetMonitorDevicePathAt(uint monitorIndex);
+        uint GetMonitorDevicePathCount();
+        WallpaperRect GetMonitorRECT([MarshalAs(UnmanagedType.LPWStr)] string monitorID);
+        void SetBackgroundColor(uint color);
+        uint GetBackgroundColor();
+        void SetPosition(int position);
+        int GetPosition();
+        void SetSlideshow(IntPtr items);
+        IntPtr GetSlideshow();
+        void SetSlideshowOptions(int options, uint slideshowTick);
+        void GetSlideshowOptions(out int options, out uint slideshowTick);
+        void AdvanceSlideshow([MarshalAs(UnmanagedType.LPWStr)] string monitorID, int direction);
+        int GetStatus();
+        void Enable([MarshalAs(UnmanagedType.Bool)] bool enable);
+    }
+
+    public static class DesktopWallpaperHelper
+    {
+        private static readonly Guid ClsidDesktopWallpaper = new Guid("C2CF3110-460E-4fc1-B9D0-8A1C0C9CC4BD");
+
+        // position: 0=Center, 1=Tile, 2=Stretch, 3=Fit, 4=Fill, 5=Span
+        public static void Apply(string path, int position)
+        {
+            Type t = Type.GetTypeFromCLSID(ClsidDesktopWallpaper, true);
+            IDesktopWallpaper dw = (IDesktopWallpaper)Activator.CreateInstance(t);
+            try
+            {
+                dw.Enable(true);
+                uint count = dw.GetMonitorDevicePathCount();
+                if (count == 0)
+                {
+                    dw.SetWallpaper(null, path);
                 }
+                for (uint i = 0; i < count; i++)
+                {
+                    dw.SetWallpaper(dw.GetMonitorDevicePathAt(i), path);
+                }
+                dw.SetPosition(position);
             }
-            else {
-                $desktopWallpaper.SetWallpaper($null, $WallpaperPath)
+            finally
+            {
+                Marshal.ReleaseComObject(dw);
             }
+        }
+    }
+}
+'@
+        }
 
-            try {
-                $desktopWallpaper.SetPosition(2)
-            }
-            catch {
-                # Caso a posição não seja suportada, apenas ignore.
-            }
-        }
-        catch {
-            Write-Log "Erro usando DesktopWallpaper COM: $($_.Exception.Message)" 'WARN'
-            throw
-        }
+        # 4 = Fill, equivalente a WallpaperStyle=10 no registro
+        [WinAPI.DesktopWallpaperHelper]::Apply($WallpaperPath, 4)
     } -ContinueOnError
 }
 
