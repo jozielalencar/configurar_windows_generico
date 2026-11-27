@@ -1,12 +1,44 @@
 ﻿#Requires -Version 5.1
-#Requires -RunAsAdministrator
 
 param(
-    [switch]$SkipWinget
+    [switch]$SkipWinget,
+
+    # All: fase de máquina (admin) + fase de usuário. Machine/User: apenas a fase indicada.
+    [ValidateSet('All', 'Machine', 'User')]
+    [string]$Phase = 'All',
+
+    # Usado pela fase de usuário quando executada em outra conta via tarefa agendada
+    [string]$LogPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Em Windows 64-bit, um PowerShell 32-bit (iniciado por um processo 32-bit) tem HKLM\SOFTWARE
+# redirecionado para WOW6432Node e System32 para SysWOW64. Relança no PowerShell nativo 64-bit.
+if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+    $nativePowerShell = Join-Path $env:WINDIR 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path -Path $nativePowerShell) {
+        Write-Host "PowerShell 32-bit detectado em Windows 64-bit. Relançando em 64-bit..." -ForegroundColor Yellow
+        $relaunchArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
+        foreach ($key in $PSBoundParameters.Keys) {
+            $value = $PSBoundParameters[$key]
+            if ($value -is [switch]) {
+                if ($value.IsPresent) { $relaunchArgs += "-$key" }
+            }
+            else {
+                $relaunchArgs += "-$key", "$value"
+            }
+        }
+        & $nativePowerShell @relaunchArgs
+        exit $LASTEXITCODE
+    }
+}
+
+# Contadores do resumo final
+$script:StepResults = [ordered]@{ OK = 0; Falhas = 0 }
+$script:FailedSteps = New-Object System.Collections.Generic.List[string]
+$script:ExplorerRestartRequested = $false
 
 function Write-Log {
     param(
@@ -29,20 +61,39 @@ function Invoke-Safely {
     param(
         [Parameter(Mandatory = $true)][string]$StepName,
         [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
-        [switch]$ContinueOnError
+        # Por padrão uma falha é registrada e o script continua. -Critical interrompe a execução.
+        [switch]$Critical
     )
 
     Write-Log $StepName 'INFO'
 
     try {
         & $ScriptBlock
+        $script:StepResults.OK++
         Write-Log "$StepName concluído." 'OK'
     }
     catch {
+        $script:StepResults.Falhas++
+        $script:FailedSteps.Add($StepName)
         Write-Log "$StepName falhou: $($_.Exception.Message)" 'ERROR'
-        if (-not $ContinueOnError) {
+        if ($Critical) {
             throw
         }
+    }
+}
+
+function Test-IsAdministrator {
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Write-StepSummary {
+    param([Parameter(Mandatory = $true)][string]$Title)
+
+    $level = if ($script:StepResults.Falhas -gt 0) { 'WARN' } else { 'OK' }
+    Write-Log "$Title - etapas OK: $($script:StepResults.OK); falhas: $($script:StepResults.Falhas)" $level
+    foreach ($step in $script:FailedSteps) {
+        Write-Log "  Falhou: $step" 'WARN'
     }
 }
 
@@ -159,7 +210,7 @@ function Disable-WindowsSpotlight {
         }
 
         Write-Log "Windows Spotlight/Destaques ajustado (ContentDeliveryManager)." 'INFO'
-    } -ContinueOnError
+    }
 }
 
 function Disable-WindowsSpotlightCompletely {
@@ -195,16 +246,16 @@ function Disable-WindowsSpotlightCompletely {
 
         # Força reinício do host de experiência do Shell para aplicar alterações
         try {
-            Get-Process -Name ShellExperienceHost -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Get-CurrentSessionProcess -Name ShellExperienceHost | Stop-Process -Force -ErrorAction SilentlyContinue
             Start-Sleep -Milliseconds 500
         }
         catch {
             Write-Log "Não foi possível reiniciar ShellExperienceHost: $($_.Exception.Message)" 'WARN'
         }
 
-        Restart-Explorer
+        Request-ExplorerRestart
         Write-Log "Tentativa completa para desativar Spotlight executada." 'INFO'
-    } -ContinueOnError
+    }
 }
 
 function Hide-SpotlightImageIcon {
@@ -234,16 +285,8 @@ function Hide-SpotlightImageIcon {
             Remove-Item -Path $nameSpacePath -Recurse -Force
         }
 
-        # Atualiza o Explorer
-        try {
-            Stop-Process -Name explorer -Force -ErrorAction Stop
-        }
-        catch {
-            # ignore
-        }
-
-        Start-Process explorer.exe
-    } -ContinueOnError
+        Request-ExplorerRestart
+    }
 }
 
 function Set-DesktopIcons {
@@ -274,9 +317,9 @@ function Set-DesktopIcons {
             Set-RegistryValueIfNeeded -Path $path -Name $recycleGuid -Value 0 -Type ([Microsoft.Win32.RegistryValueKind]::DWord)
         }
 
-        # Força refresh do Explorer para aplicar as mudanças
-        Restart-Explorer
-    } -ContinueOnError
+        # Reinício do Explorer é feito uma única vez ao final da fase de usuário
+        Request-ExplorerRestart
+    }
 }
 
 function Set-StartMenuPersonalization {
@@ -313,9 +356,9 @@ function Set-StartMenuPersonalization {
             }
         }
 
-        # Força refresh do Explorer para aplicar as mudanças
-        Restart-Explorer
-    } -ContinueOnError
+        # Reinício do Explorer é feito uma única vez ao final da fase de usuário
+        Request-ExplorerRestart
+    }
 }
 
 function New-SystemRestorePoint {
@@ -380,7 +423,7 @@ function New-SystemRestorePoint {
         }
 
         Write-Log "Ponto de restauração '$Description' criado." 'OK'
-    } -ContinueOnError
+    }
 }
 
 function Disable-SetupSuggestions {
@@ -392,7 +435,7 @@ function Disable-SetupSuggestions {
 
         Set-RegistryValueIfNeeded -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' `
             -Name 'SubscribedContent-310093Enabled' -Value 0 -Type $dword
-    } -ContinueOnError
+    }
 }
 
 function Set-WallpaperToImage {
@@ -618,17 +661,51 @@ namespace WinAPI
 
         # 4 = Fill, equivalente a WallpaperStyle=10 no registro
         [WinAPI.DesktopWallpaperHelper]::Apply($WallpaperPath, 4)
-    } -ContinueOnError
+    }
+}
+
+function Get-CurrentSessionProcess {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    # Como administrador, Get-Process lista processos de TODAS as sessões (outros usuários logados).
+    # Filtra pela sessão atual para não afetar a área de trabalho de outras pessoas.
+    $sessionId = (Get-Process -Id $PID).SessionId
+    Get-Process -Name $Name -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $sessionId }
+}
+
+function Request-ExplorerRestart {
+    # As etapas apenas sinalizam; o reinício acontece uma única vez ao final da fase de usuário.
+    $script:ExplorerRestartRequested = $true
 }
 
 function Restart-Explorer {
     Invoke-Safely "Reiniciando o Explorer para aplicar alterações" {
-        Get-Process -Name explorer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-        Start-Process explorer.exe
-        Start-Sleep -Seconds 3
+        Get-CurrentSessionProcess -Name explorer | Stop-Process -Force -ErrorAction SilentlyContinue
+
+        # O Windows (Winlogon, AutoRestartShell=1) relança o shell sozinho, como o usuário e sem elevação.
+        $deadline = (Get-Date).AddSeconds(15)
+        do {
+            Start-Sleep -Seconds 1
+            $running = @(Get-CurrentSessionProcess -Name explorer).Count -gt 0
+        } while (-not $running -and (Get-Date) -lt $deadline)
+
+        if (-not $running) {
+            if (Test-IsAdministrator) {
+                # Start-Process a partir de um processo elevado criaria um shell elevado.
+                # runas /trustlevel:0x20000 inicia com token de usuário comum.
+                Write-Log "Explorer não voltou sozinho. Iniciando sem elevação." 'WARN'
+                Start-Process -FilePath (Join-Path $env:WINDIR 'System32\runas.exe') -ArgumentList '/trustlevel:0x20000', (Join-Path $env:WINDIR 'explorer.exe') -WindowStyle Hidden
+            }
+            else {
+                Write-Log "Explorer não voltou sozinho. Iniciando manualmente." 'WARN'
+                Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe')
+            }
+            Start-Sleep -Seconds 3
+        }
+
         Invoke-ExplorerRefresh
-    } -ContinueOnError
+        $script:ExplorerRestartRequested = $false
+    }
 }
 
 
@@ -775,7 +852,7 @@ function Install-JapaneseLanguagePackFallback {
         }
 
         Install-Language -Language 'ja-JP' -ErrorAction Stop | Out-Null
-    } -ContinueOnError
+    }
 }
 
 function Install-WingetPackagesIfMissing {
@@ -846,7 +923,7 @@ function Install-WingetPackagesIfMissing {
             }
 
             throw "Falha ao instalar $packageId. Código de saída: $($result.ExitCode)"
-        } -ContinueOnError
+        }
     }
 }
 
@@ -870,7 +947,7 @@ function Update-AllPackagesWithWinget {
             $result.Text -match 'No installed package found matching input criteria') {
             Write-Log "Nenhuma atualização pendente encontrada." 'INFO'
         }
-    } -ContinueOnError
+    }
 }
 
 function Remove-AppxPackagesSafe {
@@ -901,7 +978,7 @@ function Remove-AppxPackagesSafe {
                     }
                 }
             }
-        } -ContinueOnError
+        }
     }
 }
 
@@ -1080,14 +1157,15 @@ function Test-InternetConnection {
     }
 }
 
-try {
-    Write-Log "Iniciando script..." 'INFO'
+function Invoke-MachinePhase {
+    # Fase de máquina: exige administrador e altera o sistema como um todo (HKLM, Appx de todos os usuários, winget).
+    Write-Log "=== Fase de máquina ===" 'INFO'
 
     # Define o caminho do arquivo de configuração
     $scriptDir = Split-Path -Parent $PSCommandPath
     $configPath = Join-Path $scriptDir "config.json"
 
-    # Carrega configuração do JSON
+    # Configuração é pré-requisito: sem ela a fase de máquina não continua
     $config = Import-ConfigFromJson -ConfigPath $configPath
     $appxApps = $config.remove
     $packagesToInstall = $config.install
@@ -1100,16 +1178,27 @@ try {
     if ($SkipWinget) {
         Write-Log "Opção SkipWinget ativada. Pulando instalação de pacotes via Winget." 'WARN'
     }
+    elseif (-not (Test-InternetConnection)) {
+        Write-Log "Sem conexão com a internet. Pulando instalação de pacotes." 'WARN'
+    }
     else {
-        if (-not (Test-InternetConnection)) {
-            Write-Log "Sem conexão com a internet. Pulando instalação de pacotes." 'WARN'
-        }
-        else {
+        $script:WingetReady = $false
+        Invoke-Safely "Localizando Winget" {
             Get-WingetExecutable
+            $script:WingetReady = $true
+        }
+
+        if ($script:WingetReady) {
             Update-AllPackagesWithWinget
             Install-WingetPackagesIfMissing -PackageIds $packagesToInstall
         }
     }
+}
+
+function Invoke-UserPhase {
+    # Fase de usuário: tudo que grava em HKCU/perfil. Deve rodar na conta de quem usa a área de trabalho.
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    Write-Log "=== Fase de usuário ($identity) ===" 'INFO'
 
     Set-MouseSettings
     Set-ExplorerStartFolder
@@ -1124,11 +1213,184 @@ try {
     Set-DesktopIcons
     Set-WallpaperToImage
     Add-RunToTaskbarPin
-    Restart-Explorer
 
-    Write-Log "Script concluído com sucesso." 'OK'
+    # Reinício único do Explorer, apenas se alguma etapa pediu
+    if ($script:ExplorerRestartRequested) {
+        Restart-Explorer
+    }
+}
+
+function Get-InteractiveUser {
+    # Descobre o dono da área de trabalho (explorer.exe) da sessão atual. Quando o script roda como
+    # SYSTEM (sessão 0), usa o usuário conectado ao console.
+    $sessionId = (Get-Process -Id $PID).SessionId
+    $explorer = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='explorer.exe' AND SessionId=$sessionId" -ErrorAction SilentlyContinue) |
+        Select-Object -First 1
+
+    if (-not $explorer) {
+        $consoleUser = (Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
+        if (-not $consoleUser) {
+            return $null
+        }
+
+        foreach ($candidate in @(Get-CimInstance -ClassName Win32_Process -Filter "Name='explorer.exe'" -ErrorAction SilentlyContinue)) {
+            $candidateOwner = Invoke-CimMethod -InputObject $candidate -MethodName GetOwner
+            if ($candidateOwner.ReturnValue -eq 0 -and "$($candidateOwner.Domain)\$($candidateOwner.User)" -ieq $consoleUser) {
+                $explorer = $candidate
+                break
+            }
+        }
+
+        if (-not $explorer) {
+            return $null
+        }
+    }
+
+    $owner = Invoke-CimMethod -InputObject $explorer -MethodName GetOwner
+    $ownerSid = Invoke-CimMethod -InputObject $explorer -MethodName GetOwnerSid
+    if ($owner.ReturnValue -ne 0 -or $ownerSid.ReturnValue -ne 0) {
+        return $null
+    }
+
+    return [PSCustomObject]@{
+        Name = "$($owner.Domain)\$($owner.User)"
+        Sid  = $ownerSid.Sid
+    }
+}
+
+function Invoke-UserPhaseAsUser {
+    param(
+        [Parameter(Mandatory = $true)][string]$UserName,
+        [Parameter(Mandatory = $true)][string]$UserSid
+    )
+
+    # Copia o script para um local que o usuário consegue ler e onde pode gravar o log
+    $stageDir = Join-Path $env:ProgramData 'configurar_windows_generico'
+    if (-not (Test-Path -Path $stageDir)) {
+        New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+    }
+
+    $acl = Get-Acl -Path $stageDir
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier($UserSid)), 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+    $acl.AddAccessRule($rule)
+    Set-Acl -Path $stageDir -AclObject $acl
+
+    $stageScript = Join-Path $stageDir 'configurar_windows_generico.ps1'
+    Copy-Item -Path $PSCommandPath -Destination $stageScript -Force
+    $logFile = Join-Path $stageDir ("fase_usuario_{0}.log" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+
+    $taskName = 'configurar_windows_generico_fase_usuario'
+    $powerShellExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$stageScript`" -Phase User -LogPath `"$logFile`""
+
+    $action = New-ScheduledTaskAction -Execute $powerShellExe -Argument $arguments
+    # Interactive + Limited: roda na sessão já aberta do usuário, sem pedir senha e sem elevação
+    $principal = New-ScheduledTaskPrincipal -UserId $UserName -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+
+    Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+
+    try {
+        Start-ScheduledTask -TaskName $taskName
+        Write-Log "Fase de usuário iniciada na conta $UserName. Aguardando conclusão..." 'INFO'
+
+        $deadline = (Get-Date).AddMinutes(15)
+        do {
+            Start-Sleep -Seconds 2
+            $state = (Get-ScheduledTask -TaskName $taskName).State
+        } while ($state -in @('Running', 'Queued') -and (Get-Date) -lt $deadline)
+
+        $taskResult = (Get-ScheduledTaskInfo -TaskName $taskName).LastTaskResult
+
+        if (Test-Path -Path $logFile) {
+            Write-Host ''
+            Write-Host "----- Log da fase de usuário ($UserName) -----" -ForegroundColor Gray
+            Get-Content -Path $logFile | ForEach-Object { Write-Host $_ }
+            Write-Host "----- Fim do log ($logFile) -----" -ForegroundColor Gray
+            Write-Host ''
+        }
+        else {
+            Write-Log "Log da fase de usuário não foi gerado: $logFile" 'WARN'
+        }
+
+        if ($state -in @('Running', 'Queued')) {
+            throw "A fase de usuário não terminou em 15 minutos."
+        }
+        if ($taskResult -ne 0) {
+            throw "A fase de usuário terminou com código $taskResult (veja o log acima)."
+        }
+    }
+    finally {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-Item -Path $stageScript -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-UserPhaseForInteractiveUser {
+    $current = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $interactive = Get-InteractiveUser
+
+    if (-not $interactive) {
+        Write-Log "Nenhum usuário com área de trabalho ativa foi encontrado. Fase de usuário ignorada; execute com -Phase User na conta desejada." 'WARN'
+        return
+    }
+
+    if ($interactive.Sid -eq $current.User.Value) {
+        Invoke-UserPhase
+        return
+    }
+
+    # Ex.: usuário padrão executou o .bat e um técnico digitou a senha de administrador no UAC.
+    # O HKCU deste processo é o do administrador, então a fase de usuário roda na conta da sessão.
+    Write-Log "Script elevado como '$($current.Name)', mas a área de trabalho é de '$($interactive.Name)'. Aplicando as configurações de usuário na conta '$($interactive.Name)'." 'WARN'
+    Invoke-Safely "Executando fase de usuário como $($interactive.Name)" {
+        Invoke-UserPhaseAsUser -UserName $interactive.Name -UserSid $interactive.Sid
+    }
+}
+
+$exitCode = 0
+$transcriptStarted = $false
+
+try {
+    if ($LogPath) {
+        Start-Transcript -Path $LogPath -Force | Out-Null
+        $transcriptStarted = $true
+    }
+
+    $osVersion = [Environment]::OSVersion.Version
+    Write-Log ("Iniciando script (fase: {0}; Windows build {1}; SO 64-bit: {2}; processo 64-bit: {3})" -f $Phase, $osVersion.Build, [Environment]::Is64BitOperatingSystem, [Environment]::Is64BitProcess) 'INFO'
+
+    if ($Phase -in @('All', 'Machine')) {
+        if (-not (Test-IsAdministrator)) {
+            throw "A fase de máquina exige execução como administrador. Use o run.bat ou execute com -Phase User para aplicar apenas as configurações de usuário."
+        }
+        Invoke-MachinePhase
+    }
+
+    if ($Phase -eq 'User') {
+        Invoke-UserPhase
+    }
+    elseif ($Phase -eq 'All') {
+        Invoke-UserPhaseForInteractiveUser
+    }
+
+    Write-StepSummary -Title "Resumo da execução (fase $Phase)"
+    if ($script:StepResults.Falhas -gt 0) {
+        $exitCode = 2
+        Write-Log "Script concluído com falhas em algumas etapas." 'WARN'
+    }
+    else {
+        Write-Log "Script concluído com sucesso." 'OK'
+    }
 }
 catch {
     Write-Log "Erro fatal: $($_.Exception.Message)" 'ERROR'
-    exit 1
+    $exitCode = 1
 }
+finally {
+    if ($transcriptStarted) {
+        Stop-Transcript | Out-Null
+    }
+}
+
+exit $exitCode
