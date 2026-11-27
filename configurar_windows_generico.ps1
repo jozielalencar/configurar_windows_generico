@@ -982,22 +982,113 @@ function Remove-AppxPackagesSafe {
     }
 }
 
+function Test-TaskbarPinned {
+    param(
+        [Parameter(Mandatory = $true)][string]$ShortcutName
+    )
+
+    # A barra de tarefas só mostra o que está registrado em Taskband\Favorites. Um .lnk solto na pasta
+    # 'User Pinned\TaskBar' sem a entrada correspondente não aparece na barra.
+    $taskbarPins = Join-Path $env:APPDATA "Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+    if (-not (Test-Path -Path (Join-Path $taskbarPins $ShortcutName))) {
+        return $false
+    }
+
+    $favorites = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband' -Name 'Favorites' -ErrorAction SilentlyContinue).Favorites
+    if (-not $favorites -or $favorites.Length -lt 2) {
+        return $false
+    }
+
+    # O nome do arquivo aparece no PIDL em UTF-16 (alinhamento par ou ímpar) e como nome curto ANSI
+    $texts = @(
+        [Text.Encoding]::Unicode.GetString($favorites),
+        [Text.Encoding]::Unicode.GetString($favorites, 1, $favorites.Length - 1),
+        [Text.Encoding]::Default.GetString($favorites)
+    )
+
+    foreach ($text in $texts) {
+        if ($text.IndexOf($ShortcutName, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Invoke-TaskbarPinVerb {
+    param(
+        [Parameter(Mandatory = $true)]$ShellItem
+    )
+
+    # 1) Verbo visível no menu de contexto (Windows 10 até 1803)
+    $verb = @($ShellItem.Verbs()) | Where-Object {
+        $name = ($_.Name -as [string])
+        if (-not $name) { return $false }
+        $clean = $name.Replace('&', '').Trim()
+        $clean -match '(?i)\b(pin|fixar)\b.*\b(taskbar|barra)\b' -or $clean -match '(?i)\b(taskbar|barra)\b.*\b(pin|fixar)\b'
+    } | Select-Object -First 1
+
+    if ($verb) {
+        Write-Log "Usando verbo do Explorer: $($verb.Name)" 'INFO'
+        $verb.DoIt()
+        return
+    }
+
+    # 2) Windows 10 1809+: o verbo foi ocultado para chamadas de script. Registra temporariamente um verbo
+    #    em HKCU que aponta para o mesmo manipulador interno 'Windows.taskbarpin' e o invoca.
+    $commandStoreKey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\CommandStore\shell\Windows.taskbarpin'
+    $handler = $null
+    $hklm = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($commandStoreKey)
+    if ($hklm) {
+        try { $handler = $hklm.GetValue('ExplorerCommandHandler') } finally { $hklm.Close() }
+    }
+
+    if (-not $handler) {
+        throw "Manipulador 'Windows.taskbarpin' não encontrado no registro; fixação automática não suportada nesta versão do Windows."
+    }
+
+    Write-Log "Verbo oculto pelo Windows. Usando manipulador Windows.taskbarpin ($handler)." 'INFO'
+
+    $verbName = 'ConfigurarWindowsPinToTaskbar'
+    $verbKeyPath = "Software\Classes\*\shell\$verbName"
+    $verbKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($verbKeyPath)
+    try {
+        $verbKey.SetValue('ExplorerCommandHandler', $handler, [Microsoft.Win32.RegistryValueKind]::String)
+    }
+    finally {
+        $verbKey.Close()
+    }
+
+    try {
+        $ShellItem.InvokeVerb($verbName)
+    }
+    finally {
+        [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($verbKeyPath, $false)
+    }
+}
+
 function Add-RunToTaskbarPin {
     Invoke-Safely "Fixando 'Executar' na barra de tarefas" {
 
         $shortcutName = "Executar.lnk"
         $shortcutDir  = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
         $shortcutPath = Join-Path $shortcutDir $shortcutName
+        $taskbarPins  = Join-Path $env:APPDATA "Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+        $pinnedCopy   = Join-Path $taskbarPins $shortcutName
 
-        $taskbarPins = Join-Path $env:APPDATA "Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-
-        # Verifica se já está fixado
-        if (Test-Path (Join-Path $taskbarPins $shortcutName)) {
+        if (Test-TaskbarPinned -ShortcutName $shortcutName) {
             Write-Log "'Executar' já está fixado na barra de tarefas." 'OK'
             return
         }
 
-        # Cria atalho persistente
+        # Versões anteriores do script copiavam o .lnk direto para a pasta de fixados, o que não fixa de
+        # verdade. Remove essa cópia órfã para o Explorer não criar 'Executar (2).lnk' ao fixar.
+        if (Test-Path -Path $pinnedCopy) {
+            Write-Log "Removendo atalho órfão na pasta de fixados (não registrado na barra): $pinnedCopy" 'INFO'
+            Remove-Item -Path $pinnedCopy -Force -ErrorAction SilentlyContinue
+        }
+
+        # Cria atalho persistente no Menu Iniciar
         $WScriptShell = New-Object -ComObject WScript.Shell
         $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
         $shortcut.TargetPath = "$env:WINDIR\System32\rundll32.exe"
@@ -1007,117 +1098,29 @@ function Add-RunToTaskbarPin {
         $shortcut.Description = "Abrir caixa Executar"
         $shortcut.Save()
 
-        # Tenta fixar usando verbos do Explorer
         $shell = New-Object -ComObject Shell.Application
-        $folder = $shell.Namespace($shortcutDir)
-        $item = $folder.ParseName($shortcutName)
-
+        $item = $shell.Namespace($shortcutDir).ParseName($shortcutName)
         if (-not $item) {
             throw "Não foi possível localizar o atalho criado: $shortcutPath"
         }
 
-        $pinVerbs = @(
-            "Fixar na barra de tarefas",
-            "Fixar na Barra de Tarefas",
-            "Pin to taskbar",
-            "Pin to Taskbar",
-            "Pin na barra de tarefas",
-            "Pin to Tas&kbar"
-        )
+        Invoke-TaskbarPinVerb -ShellItem $item
 
-        $verb = $item.Verbs() | ForEach-Object {
-            $name = $_.Name -as [string]
-            if (-not $name) {
-                return
-            }
+        # O Explorer grava a fixação de forma assíncrona
+        $deadline = (Get-Date).AddSeconds(5)
+        do {
+            Start-Sleep -Milliseconds 500
+            $pinned = Test-TaskbarPinned -ShortcutName $shortcutName
+        } while (-not $pinned -and (Get-Date) -lt $deadline)
 
-            $cleanName = $name.Replace("&", "").Trim()
-            [PSCustomObject]@{
-                Verb      = $_
-                CleanName = $cleanName
-            }
-        } | Where-Object {
-            $pinVerbs -contains $_.CleanName -or
-            $_.CleanName -match '(?i)\b(pin|fixar)\b.*\b(taskbar|barra)\b' -or
-            $_.CleanName -match '(?i)\b(taskbar|barra)\b.*\b(pin|fixar)\b'
-        } | Select-Object -First 1
-
-        if (-not $verb) {
-            $availableVerbNames = $item.Verbs() | ForEach-Object {
-                $name = $_.Name -as [string]
-                if ($name) { $name.Replace("&", "").Trim() }
-            } | Where-Object { $_ }
-
-            Write-Log "Verbos disponíveis: $($availableVerbNames -join '; ')" 'INFO'
+        if ($pinned) {
+            Write-Log "'Executar' fixado na barra de tarefas com sucesso." 'OK'
         }
-
-        if ($verb) {
-            $verb.Verb.DoIt()
-            Start-Sleep -Milliseconds 800
-
-            if (Test-Path (Join-Path $taskbarPins $shortcutName)) {
-                Write-Log "'Executar' fixado na barra de tarefas com sucesso." 'OK'
-            } else {
-                Write-Log "Comando de fixação executado, mas não foi possível confirmar se foi fixado." 'WARN'
-            }
+        elseif ([Environment]::OSVersion.Version.Build -ge 22000) {
+            Write-Log "O Windows 11 não permite fixar na barra de tarefas por script. Atalho disponível no Menu Iniciar: $shortcutPath" 'WARN'
         }
         else {
-            Write-Log "Não encontrei a opção 'Fixar na barra de tarefas'. Tentando fallback direto via pasta de itens fixados." 'WARN'
-
-            $taskbarShortcutPath = Join-Path $taskbarPins $shortcutName
-            
-            Write-Log "Caminho do taskbar pins: $taskbarPins" 'INFO'
-            Write-Log "Caminho do atalho original: $shortcutPath" 'INFO'
-            Write-Log "Caminho de destino: $taskbarShortcutPath" 'INFO'
-            
-            if (-not (Test-Path -Path $taskbarPins)) {
-                Write-Log "Pasta de pins não existe. Tentando criar: $taskbarPins" 'WARN'
-                try {
-                    New-Item -Path $taskbarPins -ItemType Directory -Force | Out-Null
-                    Write-Log "Pasta criada com sucesso." 'INFO'
-                }
-                catch {
-                    Write-Log "Erro ao criar pasta de pins: $($_.Exception.Message)" 'ERROR'
-                    $taskbarPins = $null
-                }
-            }
-            else {
-                Write-Log "Pasta de pins existe." 'INFO'
-            }
-
-            if ($taskbarPins) {
-                try {
-                    if (Test-Path $shortcutPath) {
-                        Write-Log "Atalho original existe. Copiando..." 'INFO'
-                        Copy-Item -Path $shortcutPath -Destination $taskbarShortcutPath -Force -ErrorAction Stop
-                        Write-Log "Atalho copiado com sucesso." 'INFO'
-                        
-                        Start-Sleep -Milliseconds 500
-                        Invoke-ExplorerRefresh
-
-                        if (Test-Path $taskbarShortcutPath) {
-                            Write-Log "'Executar' fixado na barra de tarefas via fallback (cópia direta)." 'OK'
-                        }
-                        else {
-                            Write-Log "Cópia foi feita mas o arquivo não está acessível imediatamente. Aguardando..." 'WARN'
-                            Start-Sleep -Milliseconds 1000
-                            if (Test-Path $taskbarShortcutPath) {
-                                Write-Log "'Executar' confirmado após espera." 'OK'
-                            }
-                            else {
-                                Write-Log "Atalho criado em: $shortcutPath (não confirmado no taskbar)" 'INFO'
-                            }
-                        }
-                    }
-                    else {
-                        Write-Log "Atalho original não existe em: $shortcutPath" 'ERROR'
-                    }
-                }
-                catch {
-                    Write-Log "Fallback direto falhou: $($_.Exception.Message)" 'ERROR'
-                    Write-Log "Atalho foi criado em: $shortcutPath (pode ser fixado manualmente)" 'INFO'
-                }
-            }
+            Write-Log "Comando de fixação executado, mas a barra de tarefas não registrou o item. Atalho disponível no Menu Iniciar: $shortcutPath" 'WARN'
         }
     }
 }
